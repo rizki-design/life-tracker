@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1E1E1E">
+  <title>Life & Body Tracker</title>
+  <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiTGlmZSAmIEJvZHkgVHJhY2tlciIsInNob3J0X25hbWUiOiJUcmFja2VyIiwic3RhcnRfdXJsIjoiLiIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiMxRTFFMUUiLCJ0aGVtZV9jb2xvciI6IiMxRTFFMUUifQ==">
+  <style>
+    * { margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; }
+    body { background: #1E1E1E; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  </style>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const WEEKS_TOTAL = 52;
+const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+// Auto-calculate current week from date
+// Week 1 starts Monday Dec 30 2025 (ISO week containing Jan 1 2026)
+const getCurrentWeek = () => {
+  const now = new Date();
+  const yearStart = new Date(2026, 0, 1);
+  const jan1Day = yearStart.getDay() === 0 ? 6 : yearStart.getDay() - 1; // 0=Mon
+  const firstMonday = new Date(2026, 0, 1 - jan1Day); // Monday of week 1
+  const diff = now - firstMonday;
+  const week = Math.floor(diff / (7 * 24 * 60 * 60 * 1000)) + 1;
+  return Math.max(1, Math.min(WEEKS_TOTAL, week));
+};
+const CURRENT_WEEK = getCurrentWeek();
+
+const DEFAULT_OBJECTIVES = [
+  { id: "gym", label: "Hit the Gym", category: "body", target: 3, max: 5 },
+  { id: "cardio", label: "Morning Cardio / Walk", category: "body", target: 3, max: 6 },
+  { id: "meals", label: "Home-Cooked Meals", category: "body", target: 4, max: 7 },
+  { id: "nobinge", label: "Clean Eating Days", category: "mind", target: 5, max: 7 },
+  { id: "recover", label: "Bounce-Backs", category: "mind", target: 1, max: 3 },
+  { id: "career", label: "Career Growth Actions", category: "growth", target: 1, max: 3 },
+  { id: "reflect", label: "Reflection / Journal", category: "growth", target: 1, max: 3 },
+];
+
+const CATEGORIES = ["body", "mind", "growth"];
+const CAT_LABELS = { body: "Body", mind: "Mind", growth: "Growth" };
+
+const T = {
+  light: {
+    bg: "#FAFAFA", card: "#FFFFFF", border: "#EBEBEB", borderSub: "#F2F2F2",
+    text: "#1A1A1A", textSecondary: "#6B6B6B", textTertiary: "#999999", textFaint: "#CCCCCC",
+    inputBg: "#F7F7F7", inputBorder: "#E5E5E5",
+    dotBorder: "#CCCCCC", dotBorderHover: "#AAAAAA",
+    goalLine: "#1A1A1A", noteBg: "#FFFDF5", noteBorder: "#F0E8D0",
+  },
+  dark: {
+    bg: "#1E1E1E", card: "#262626", border: "#363636", borderSub: "#2E2E2E",
+    text: "#E0E0E0", textSecondary: "#888888", textTertiary: "#666666", textFaint: "#444444",
+    inputBg: "#2A2A2A", inputBorder: "#3A3A3A",
+    dotBorder: "#555555", dotBorderHover: "#777777",
+    goalLine: "#E0E0E0", noteBg: "#2A2820", noteBorder: "#3A3828",
+  },
+};
+
+const CAT = {
+  body: { color: "#4C9ADE", soft: { light: "#EDF4FC", dark: "#1E2C3A" } },
+  mind: { color: "#E8A435", soft: { light: "#FFF7E6", dark: "#332E1E" } },
+  growth: { color: "#5DAE63", soft: { light: "#EEF7EF", dark: "#1E2E1F" } },
+};
+
+const GOLD = "#E8A435";
+const JOURNAL_FONT = "'Lora', Georgia, serif";
+
+function getVerdict(objs, counts) {
+  if (!objs.length) return null;
+  const met = objs.filter(o => (counts[o.id] || 0) >= o.target).length;
+  const r = met / objs.length;
+  if (r >= 0.7) return "solid"; if (r >= 0.4 || met > 0) return "recovered"; return "spiraled";
+}
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function resolveObjs(weeks, weekNum) {
+  for (let n = weekNum - 1; n >= 1; n--) { const w = weeks[`w${n}`]; if (w?.objectives?.length) return JSON.parse(JSON.stringify(w.objectives)); }
+  for (let n = weekNum + 1; n <= WEEKS_TOTAL; n++) { const w = weeks[`w${n}`]; if (w?.objectives?.length) return JSON.parse(JSON.stringify(w.objectives)); }
+  return JSON.parse(JSON.stringify(DEFAULT_OBJECTIVES));
+}
+const parseNote = (note) => { if (!note) return ""; if (typeof note === "string") return note; return [note.title, note.body].filter(Boolean).join("\n"); };
+
+// ─── Shared Components ───
+const Confetti = ({ active, onDone }) => {
+  const ref = useRef(null); const anim = useRef(null);
+  useEffect(() => {
+    if (!active || !ref.current) return;
+    const c = ref.current, ctx = c.getContext("2d");
+    const W = c.width = c.parentElement.offsetWidth, H = c.height = c.parentElement.offsetHeight;
+    const cols = ["#DC4C3E","#E8A435","#4C9ADE","#5DAE63","#9B59B6","#FF9800"];
+    const ps = Array.from({length:30},()=>({x:W/2+(Math.random()-.5)*60,y:H/2,vx:(Math.random()-.5)*10,vy:-Math.random()*8-3,s:Math.random()*5+2,col:cols[~~(Math.random()*cols.length)],rot:Math.random()*360,rs:(Math.random()-.5)*12,l:1,d:.015+Math.random()*.01}));
+    let f=0;const go=()=>{ctx.clearRect(0,0,W,H);let alive=false;ps.forEach(p=>{if(p.l<=0)return;alive=true;p.x+=p.vx;p.vy+=.25;p.y+=p.vy;p.rot+=p.rs;p.l-=p.d;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot*Math.PI/180);ctx.globalAlpha=Math.max(0,p.l);ctx.fillStyle=p.col;ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*.6);ctx.restore()});if(alive&&++f<100)anim.current=requestAnimationFrame(go);else{ctx.clearRect(0,0,W,H);onDone?.()}};go();
+    return ()=>anim.current&&cancelAnimationFrame(anim.current);
+  },[active]);
+  if(!active)return null;
+  return <canvas ref={ref} style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none",zIndex:10}}/>;
+};
+
+const Dot = ({ filled, exceeded, color, theme, onClick, size=24 }) => {
+  const t = T[theme];
+  return (
+    <div onClick={onClick} style={{width:size,height:size,borderRadius:"50%",border:`2px solid ${filled?(exceeded?GOLD:color):t.dotBorder}`,background:filled?(exceeded?GOLD:color):"transparent",cursor:onClick?"pointer":"default",transition:"all 0.15s ease",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+      {filled&&<svg width={size*0.5} height={size*0.5} viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke={exceeded?"#1A1A1A":"#FFF"} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+    </div>
+  );
+};
+
+const ObjRow = ({ obj, count, onSet, theme, onEdit, onDelete, isHistorical }) => {
+  const t = T[theme]; const c = CAT[obj.category];
+  const met = count >= obj.target; const exceeded = count > obj.target; const maxed = count >= obj.max;
+  const [confetti,setConfetti]=useState(false); const prevEx=useRef(false);
+  useEffect(()=>{if(exceeded&&!prevEx.current)setConfetti(true);prevEx.current=exceeded},[exceeded]);
+  const tags=["LOCKED IN","BEYOND","MACHINE","ABOVE & BEYOND"];
+  const tag=tags[(obj.id.charCodeAt(0)+count)%tags.length];
+  return (
+    <div style={{position:"relative",padding:"16px",borderBottom:`1px solid ${t.borderSub}`}}>
+      <Confetti active={confetti} onDone={()=>setConfetti(false)}/>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}}>
+          <span onClick={onEdit} style={{fontSize:14,fontWeight:600,color:met?c.color:t.text,letterSpacing:-0.2,cursor:isHistorical?"default":"pointer",borderBottom:isHistorical?"none":`1px dashed ${t.borderSub}`,paddingBottom:1}}>{obj.label}</span>
+          {maxed&&<span style={{fontSize:10,fontWeight:700,color:GOLD,animation:"pulse 2s infinite"}}>MAXED</span>}
+          {exceeded&&!maxed&&<span style={{fontSize:10,fontWeight:600,color:GOLD}}>{tag}</span>}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:2}}>
+          <span style={{fontSize:10,fontWeight:600,color:c.color,background:theme==="dark"?c.soft.dark:c.soft.light,padding:"2px 8px",borderRadius:4}}>{CAT_LABELS[obj.category]}</span>
+          {!isHistorical&&<button onClick={onDelete} style={{background:"none",border:"none",cursor:"pointer",padding:"4px 6px",fontSize:16,color:t.textTertiary,fontWeight:600,lineHeight:1}}>&times;</button>}
+        </div>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{display:"flex",alignItems:"center",flex:1}}>
+          {Array.from({length:obj.max},(_,i)=>{const showGoalLine=i===obj.target-1&&obj.target<obj.max;return(<div key={i} style={{display:"flex",alignItems:"center"}}><Dot filled={i<count} exceeded={i>=obj.target} color={c.color} theme={theme} onClick={isHistorical?undefined:()=>onSet(obj.id,count===i+1?i:i+1)}/>{showGoalLine&&<div style={{width:2,height:32,background:t.goalLine,borderRadius:1,marginLeft:8,marginRight:4,opacity:0.2}}/>}{!showGoalLine&&i<obj.max-1&&<div style={{width:8}}/>}</div>)})}
+        </div>
+        <div onClick={!isHistorical&&count>0?()=>onSet(obj.id,0):undefined} style={{display:"flex",alignItems:"baseline",gap:2,flexShrink:0,cursor:!isHistorical&&count>0?"pointer":"default",borderRadius:6,padding:"2px 6px",margin:"-2px -6px",transition:"background 0.15s",background:"transparent"}} onMouseEnter={e=>{if(!isHistorical&&count>0)e.currentTarget.style.background=t.borderSub}} onMouseLeave={e=>{e.currentTarget.style.background="transparent"}}>
+          <span style={{fontSize:16,fontWeight:700,fontVariantNumeric:"tabular-nums",color:met?(exceeded?GOLD:c.color):t.textTertiary}}>{count}</span>
+          <span style={{fontSize:11,color:t.textTertiary,fontWeight:500}}>/{obj.target}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Modals ───
+const Modal = ({ obj, theme, onSave, onCancel }) => {
+  const t = T[theme];
+  const [label,setLabel]=useState(obj?.label||"");const [cat,setCat]=useState(obj?.category||"body");
+  const [target,setTarget]=useState(obj?.target||3);const [max,setMax]=useState(obj?.max||5);
+  const inp={width:"100%",padding:"10px 12px",borderRadius:8,border:`1px solid ${t.inputBorder}`,background:t.inputBg,color:t.text,fontSize:14,outline:"none",boxSizing:"border-box"};
+  const stp={width:34,height:34,borderRadius:8,border:`1px solid ${t.inputBorder}`,background:t.inputBg,color:t.text,fontSize:16,cursor:"pointer",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center"};
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20,backdropFilter:"blur(4px)"}}>
+      <div style={{background:t.card,borderRadius:14,padding:24,width:"100%",maxWidth:380,border:`1px solid ${t.border}`,boxShadow:"0 16px 48px rgba(0,0,0,0.15)"}}>
+        <h3 style={{fontSize:16,fontWeight:700,color:t.text,margin:"0 0 20px"}}>{obj?"Edit Objective":"New Objective"}</h3>
+        <div style={{marginBottom:16}}><label style={{fontSize:11,fontWeight:600,color:t.textSecondary,display:"block",marginBottom:6}}>Name</label><input value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. Hit the Gym" style={inp}/></div>
+        <div style={{marginBottom:16}}><label style={{fontSize:11,fontWeight:600,color:t.textSecondary,display:"block",marginBottom:6}}>Category</label><div style={{display:"flex",gap:6}}>{CATEGORIES.map(c2=>(<button key={c2} onClick={()=>setCat(c2)} style={{flex:1,padding:8,borderRadius:8,cursor:"pointer",transition:"all 0.15s",border:`1.5px solid ${cat===c2?CAT[c2].color:t.inputBorder}`,background:cat===c2?(theme==="dark"?CAT[c2].soft.dark:CAT[c2].soft.light):"transparent",color:cat===c2?CAT[c2].color:t.textTertiary,fontSize:12,fontWeight:600}}>{CAT_LABELS[c2]}</button>))}</div></div>
+        <div style={{display:"flex",gap:16,marginBottom:24}}>
+          <div style={{flex:1}}><label style={{fontSize:11,fontWeight:600,color:t.textSecondary,display:"block",marginBottom:6}}>Target</label><div style={{display:"flex",alignItems:"center",gap:8}}><button onClick={()=>setTarget(Math.max(1,target-1))} style={stp}>-</button><span style={{fontSize:18,fontWeight:700,color:t.text,minWidth:20,textAlign:"center"}}>{target}</span><button onClick={()=>setTarget(Math.min(max,target+1))} style={stp}>+</button></div></div>
+          <div style={{flex:1}}><label style={{fontSize:11,fontWeight:600,color:t.textSecondary,display:"block",marginBottom:6}}>Max</label><div style={{display:"flex",alignItems:"center",gap:8}}><button onClick={()=>{const v=Math.max(1,max-1);setMax(v);if(target>v)setTarget(v)}} style={stp}>-</button><span style={{fontSize:18,fontWeight:700,color:t.text,minWidth:20,textAlign:"center"}}>{max}</span><button onClick={()=>setMax(Math.min(7,max+1))} style={stp}>+</button></div></div>
+        </div>
+        <div style={{display:"flex",gap:8}}><button onClick={onCancel} style={{flex:1,padding:12,borderRadius:10,border:`1px solid ${t.border}`,background:"transparent",color:t.textSecondary,fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={()=>{if(!label.trim())return;onSave({id:obj?.id||uid(),label:label.trim(),category:cat,target,max})}} style={{flex:1,padding:12,borderRadius:10,border:"none",background:"#DC4C3E",color:"#FFF",fontSize:13,fontWeight:600,cursor:"pointer",opacity:label.trim()?1:0.4}}>Save</button></div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Weight Log Modal ───
+const WeightModal = ({ value, target, theme, onSave, onCancel, editEntry, onDelete, selectedWeek }) => {
+  const t = T[theme];
+  const initKg = editEntry ? editEntry.kg : (value || 80);
+  const [kgStr, setKgStr] = useState(String(initKg));
+  const kg = parseFloat(kgStr) || 0;
+  const today = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
+  const [day, setDay] = useState(editEntry ? editEntry.day : today);
+  const sliderRef = useRef(null);
+  const dragging = useRef(false);
+
+  const MIN = 40; const MAX = 180; const RANGE = MAX - MIN;
+
+  // Calculate dates for the selected week
+  // Week 1 starts on Jan 1 2026 (adjust as needed)
+  const yearStart = new Date(2026, 0, 1); // Jan 1 2026
+  const jan1Day = yearStart.getDay() === 0 ? 6 : yearStart.getDay() - 1; // day of week for Jan 1
+  const weekStartOffset = ((selectedWeek || CURRENT_WEEK) - 1) * 7 - jan1Day;
+  const weekDates = DAYS.map((d, i) => {
+    const date = new Date(2026, 0, 1 + weekStartOffset + i);
+    return { label: d, date: date.getDate(), month: date.getMonth() + 1 };
+  });
+
+  const handleSlider = (e) => {
+    const rect = sliderRef.current.getBoundingClientRect();
+    const ptrX = e.touches ? e.touches[0].clientX : e.clientX;
+    const ratio = Math.max(0, Math.min(1, (ptrX - rect.left) / rect.width));
+    const v = Math.round((MIN + ratio * RANGE) * 10) / 10;
+    setKgStr(String(v));
+  };
+
+  const onPointerDown = (e) => { dragging.current = true; handleSlider(e); };
+  const onPointerMove = (e) => { if (dragging.current) handleSlider(e); };
+  const onPointerUp = () => { dragging.current = false; };
+
+  useEffect(() => {
+    const up = () => { dragging.current = false; };
+    window.addEventListener("pointerup", up); window.addEventListener("touchend", up);
+    return () => { window.removeEventListener("pointerup", up); window.removeEventListener("touchend", up); };
+  }, []);
+
+  const pct = Math.max(0, Math.min(100, ((kg - MIN) / RANGE) * 100));
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16,backdropFilter:"blur(4px)"}}>
+      <div style={{background:t.card,borderRadius:14,padding:20,width:"100%",maxWidth:360,border:`1px solid ${t.border}`,boxShadow:"0 16px 48px rgba(0,0,0,0.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:t.text,margin:0}}>Log Weight</h3>
+          {target>0&&<span style={{fontSize:11,color:"#4C9ADE",fontWeight:600}}>Target: {target} kg</span>}
+        </div>
+
+        {/* Day selector with dates */}
+        <div style={{display:"flex",gap:3,marginBottom:20}}>
+          {weekDates.map((wd, i) => (
+            <button key={i} onClick={()=>setDay(i)} style={{
+              flex:1,padding:"5px 0",borderRadius:6,
+              border: day===i ? "1.5px solid #4C9ADE" : `1px solid ${t.borderSub}`,
+              background: day===i ? "rgba(76,154,222,0.12)" : "transparent",
+              color: day===i ? "#4C9ADE" : i===today ? t.text : t.textTertiary,
+              fontSize:9,fontWeight:700,cursor:"pointer",
+              display:"flex",flexDirection:"column",alignItems:"center",gap:1,
+              position:"relative",
+            }}>
+              <span>{wd.label}</span>
+              <span style={{fontSize:8,fontWeight:600,opacity:0.7}}>{wd.date}</span>
+              {i===today&&<div style={{position:"absolute",bottom:1,left:"50%",transform:"translateX(-50%)",width:3,height:3,borderRadius:"50%",background:day===i?"#4C9ADE":t.textTertiary}}/>}
+            </button>
+          ))}
+        </div>
+
+        {/* Big number — free typing */}
+        <div style={{textAlign:"center",marginBottom:16}}>
+          <div style={{display:"inline-flex",alignItems:"baseline",gap:4}}>
+            <input
+              value={kgStr}
+              onChange={e => setKgStr(e.target.value)}
+              onBlur={() => { const v = parseFloat(kgStr); if (isNaN(v) || v < MIN) setKgStr(String(MIN)); else if (v > MAX) setKgStr(String(MAX)); else setKgStr(String(v)); }}
+              type="text" inputMode="decimal"
+              style={{background:"transparent",border:"none",outline:"none",color:t.text,fontSize:42,fontWeight:800,width:130,textAlign:"center",fontVariantNumeric:"tabular-nums",letterSpacing:-1}}
+            />
+            <span style={{fontSize:18,fontWeight:600,color:t.textTertiary}}>kg</span>
+          </div>
+        </div>
+
+        {/* Slider */}
+        <div ref={sliderRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
+          onTouchStart={onPointerDown} onTouchMove={onPointerMove} onTouchEnd={onPointerUp}
+          style={{position:"relative",height:40,cursor:"pointer",touchAction:"none",marginBottom:6}}>
+          <div style={{position:"absolute",top:18,left:0,right:0,height:4,borderRadius:2,background:t.borderSub}}/>
+          <div style={{position:"absolute",top:18,left:0,width:`${pct}%`,height:4,borderRadius:2,background:"#4C9ADE"}}/>
+          {target > 0 && target >= MIN && target <= MAX && (
+            <div style={{position:"absolute",top:12,left:`${((target-MIN)/RANGE)*100}%`,transform:"translateX(-50%)",width:2,height:16,background:"#5DAE63",borderRadius:1,opacity:0.6}}/>
+          )}
+          <div style={{position:"absolute",top:10,left:`${pct}%`,transform:"translateX(-50%)",width:20,height:20,borderRadius:"50%",background:"#4C9ADE",border:"3px solid "+t.card,boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:t.textFaint,fontWeight:600,marginBottom:16}}>
+          <span>{MIN} kg</span><span>{MAX} kg</span>
+        </div>
+
+        <div style={{display:"flex",gap:8}}>
+          {editEntry && onDelete && <button onClick={()=>onDelete(day)} style={{padding:"11px 14px",borderRadius:10,border:"none",background:"rgba(220,76,62,0.12)",color:"#DC4C3E",fontSize:13,fontWeight:600,cursor:"pointer"}}>Delete</button>}
+          <button onClick={onCancel} style={{flex:1,padding:11,borderRadius:10,border:`1px solid ${t.border}`,background:"transparent",color:t.textSecondary,fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+          <button onClick={()=>{ const v = parseFloat(kgStr); if (!isNaN(v) && v >= MIN && v <= MAX) onSave(v, day); }} style={{flex:1,padding:11,borderRadius:10,border:"none",background:"#4C9ADE",color:"#FFF",fontSize:13,fontWeight:600,cursor:"pointer",opacity:kg>=MIN&&kg<=MAX?1:0.4}}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Mini Chart ───
+const MiniChart = ({ entries, target, theme }) => {
+  const t = T[theme];
+  if (!entries.length) return null;
+  const vals = entries.map(e => e.kg);
+  const dataMin = Math.min(...vals, target || Infinity);
+  const dataMax = Math.max(...vals, target || 0);
+  const min = Math.floor(dataMin - 2);
+  const max = Math.ceil(dataMax + 2);
+  const range = max - min || 1;
+
+  const W = 320; const H = 150;
+  const padL = 28; const padR = 8; const padT = 24; const padB = 22;
+  const chartW = W - padL - padR; const chartH = H - padT - padB;
+
+  const points = entries.map((e, i) => ({
+    x: padL + (i / Math.max(entries.length - 1, 1)) * chartW,
+    y: padT + (1 - (e.kg - min) / range) * chartH,
+    kg: e.kg, day: DAYS[e.day] || `W${e.week}`,
+  }));
+  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  const area = line + ` L${points[points.length-1].x},${padT+chartH} L${points[0].x},${padT+chartH} Z`;
+  const targetY = target > 0 ? padT + (1 - (target - min) / range) * chartH : null;
+
+  const ySteps = 3;
+  const yLabels = Array.from({ length: ySteps + 1 }, (_, i) => Math.round(min + (i / ySteps) * (max - min)));
+
+  const lastP = points[points.length - 1];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:150,display:"block"}}>
+      {/* Grid lines + Y labels */}
+      {yLabels.map((v, i) => {
+        const y = padT + (1 - (v - min) / range) * chartH;
+        return (
+          <g key={i}>
+            <line x1={padL} y1={y} x2={W-padR} y2={y} stroke={t.borderSub} strokeWidth="0.5"/>
+            <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="8" fontWeight="600" fill={t.textFaint}>{v}</text>
+          </g>
+        );
+      })}
+      {/* Target dashed line */}
+      {targetY !== null && <line x1={padL} y1={targetY} x2={W-padR} y2={targetY} stroke="#5DAE63" strokeWidth="1" strokeDasharray="4 3" opacity="0.4"/>}
+      {targetY !== null && <text x={W-padR} y={targetY - 4} textAnchor="end" fontSize="7" fontWeight="700" fill="#5DAE63" opacity="0.6">Goal</text>}
+      {/* Area fill */}
+      <path d={area} fill="url(#areaGrad)" opacity="0.15"/>
+      <defs>
+        <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#4C9ADE"/>
+          <stop offset="100%" stopColor="#4C9ADE" stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      {/* Line */}
+      <path d={line} fill="none" stroke="#4C9ADE" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      {/* Dots — small for intermediate, larger for last */}
+      {points.map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r={i === points.length - 1 ? 5 : 3} fill="#4C9ADE" stroke={t.card} strokeWidth={i === points.length - 1 ? 2.5 : 1.5}/>
+      ))}
+      {/* Last point tooltip */}
+      {lastP && (
+        <g>
+          <rect x={lastP.x - 22} y={lastP.y - 28} width="44" height="18" rx="4" fill={theme==="dark"?"rgba(255,255,255,0.12)":"rgba(0,0,0,0.06)"}/>
+          <text x={lastP.x} y={lastP.y - 15} textAnchor="middle" fontSize="10" fontWeight="700" fill={t.text}>{lastP.kg}</text>
+        </g>
+      )}
+      {/* X labels */}
+      {points.map((p, i) => (
+        <text key={i} x={p.x} y={H - 4} textAnchor="middle" fontSize="8" fontWeight="600" fill={t.textFaint}>{p.day}</text>
+      ))}
+    </svg>
+  );
+};
+
+// ─── Settings Modal ───
+const DATA_VERSION = 9;
+
+const SettingsModal = ({ target, theme, onSave, onCancel, allData, onImport, mode, objs, counts, onReorder, isHistorical }) => {
+  const t = T[theme];
+  const [tgt, setTgt] = useState(target);
+  const [importErr, setImportErr] = useState("");
+  const [importOk, setImportOk] = useState(false);
+  const [reorderList, setReorderList] = useState(objs ? [...objs] : []);
+  const dragItem = useRef(null); const dragOver = useRef(null);
+
+  const [dataMode, setDataMode] = useState(null); // null | "export" | "import"
+  const [importText, setImportText] = useState("");
+  const [copied, setCopied] = useState(false);
+  const exportRef = useRef(null);
+
+  const exportJson = JSON.stringify({ _format: "life-body-tracker", _version: DATA_VERSION, _exportedAt: new Date().toISOString(), ...allData }, null, 2);
+
+  const handleCopy = () => {
+    const ta = exportRef.current;
+    if (!ta) return;
+    ta.select(); ta.setSelectionRange(0, 99999);
+    try { document.execCommand("copy"); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch(e) {
+      try { navigator.clipboard.writeText(exportJson).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); } catch(e2) {}
+    }
+  };
+
+  const handlePasteImport = () => {
+    setImportErr(""); setImportOk(false);
+    const txt = importText.trim();
+    if (!txt) { setImportErr("Paste your backup data first."); return; }
+    try {
+      const parsed = JSON.parse(txt);
+      if (!parsed._format || parsed._format !== "life-body-tracker") { setImportErr("Invalid data. Not a tracker backup."); return; }
+      const { _format, _version, _exportedAt, ...data } = parsed;
+      onImport(data); setImportOk(true); setImportText("");
+    } catch (err) { setImportErr("Invalid JSON. Make sure you copied the full backup."); }
+  };
+
+  // Reorder helpers
+  const moveObj = (idx, dir) => { const n = idx + dir; if (n < 0 || n >= reorderList.length) return; const a = [...reorderList]; [a[idx], a[n]] = [a[n], a[idx]]; setReorderList(a); };
+  const handleDragEnd = () => { if (dragItem.current === null || dragOver.current === null || dragItem.current === dragOver.current) { dragItem.current = null; dragOver.current = null; return; } const a = [...reorderList]; const it = a.splice(dragItem.current, 1)[0]; a.splice(dragOver.current, 0, it); setReorderList(a); dragItem.current = null; dragOver.current = null; };
+
+  const handleSave = () => {
+    if (mode === "life" && onReorder) onReorder(reorderList);
+    onSave(tgt);
+  };
+
+  const btnRow = {width:"100%",padding:"10px 14px",borderRadius:8,border:`1px solid ${t.borderSub}`,background:"transparent",color:t.text,fontSize:13,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:10,marginBottom:6};
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16,backdropFilter:"blur(4px)"}}>
+      <div style={{background:t.card,borderRadius:14,padding:20,width:"100%",maxWidth:360,border:`1px solid ${t.border}`,boxShadow:"0 16px 48px rgba(0,0,0,0.2)",maxHeight:"85vh",overflowY:"auto"}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:t.text,margin:"0 0 16px"}}>Settings</h3>
+
+        {/* Body Tracker settings */}
+        {mode === "body" && (
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:600,color:t.textSecondary,marginBottom:8}}>Body Tracker</div>
+            <label style={{fontSize:10,fontWeight:600,color:t.textFaint,display:"block",marginBottom:4}}>Target Weight (kg)</label>
+            <input value={tgt} onChange={e=>setTgt(parseFloat(e.target.value)||0)} type="number" step="0.1" style={{width:"100%",padding:"10px 12px",borderRadius:8,border:`1px solid ${t.inputBorder}`,background:t.inputBg,color:t.text,fontSize:15,fontWeight:700,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+        )}
+
+        {/* Life Tracker settings — reorder */}
+        {mode === "life" && !isHistorical && objs?.length > 0 && (
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:600,color:t.textSecondary,marginBottom:8}}>Reorder Objectives</div>
+            <div style={{display:"flex",flexDirection:"column",gap:3}}>
+              {reorderList.map((o, i) => {
+                const c = CAT[o.category]; const cnt = counts?.[o.id] || 0;
+                return (
+                  <div key={o.id} draggable onDragStart={()=>{dragItem.current=i}} onDragEnter={()=>{dragOver.current=i}} onDragEnd={handleDragEnd} onDragOver={e=>e.preventDefault()}
+                    style={{display:"flex",alignItems:"center",gap:6,padding:"7px 10px",background:t.inputBg,borderRadius:8,border:`1px solid ${t.borderSub}`,cursor:"grab",userSelect:"none"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:3,flexShrink:0}}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill={t.textFaint}><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
+                      <div style={{display:"flex",flexDirection:"column"}}>
+                        <button onClick={()=>moveObj(i,-1)} style={{width:16,height:12,border:"none",padding:0,background:"transparent",cursor:i===0?"default":"pointer",opacity:i===0?0.15:0.5,display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke={t.text} strokeWidth="3" strokeLinecap="round"><path d="M18 15l-6-6-6 6"/></svg></button>
+                        <button onClick={()=>moveObj(i,1)} style={{width:16,height:12,border:"none",padding:0,background:"transparent",cursor:i===reorderList.length-1?"default":"pointer",opacity:i===reorderList.length-1?0.15:0.5,display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke={t.text} strokeWidth="3" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg></button>
+                      </div>
+                    </div>
+                    <span style={{flex:1,fontSize:12,fontWeight:600,color:t.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.label}</span>
+                    <span style={{fontSize:10,fontWeight:700,color:cnt>=o.target?c.color:t.textTertiary,fontVariantNumeric:"tabular-nums",flexShrink:0}}>{cnt}/{o.target}</span>
+                    <span style={{fontSize:8,fontWeight:600,color:c.color,background:theme==="dark"?c.soft.dark:c.soft.light,padding:"2px 5px",borderRadius:3,flexShrink:0}}>{CAT_LABELS[o.category]}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Divider */}
+        <div style={{height:1,background:t.borderSub,marginBottom:16}}/>
+
+        {/* Data Management */}
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:600,color:t.textSecondary,marginBottom:8}}>Data Management</div>
+
+          {/* Tab toggle */}
+          <div style={{display:"flex",gap:0,marginBottom:10,borderRadius:8,overflow:"hidden",border:`1px solid ${t.borderSub}`}}>
+            <button onClick={()=>setDataMode("export")} style={{flex:1,padding:"8px 0",border:"none",background:dataMode==="export"?"rgba(76,154,222,0.12)":"transparent",color:dataMode==="export"?"#4C9ADE":t.textTertiary,fontSize:12,fontWeight:700,cursor:"pointer"}}>Export</button>
+            <button onClick={()=>setDataMode("import")} style={{flex:1,padding:"8px 0",border:"none",borderLeft:`1px solid ${t.borderSub}`,background:dataMode==="import"?"rgba(76,154,222,0.12)":"transparent",color:dataMode==="import"?"#4C9ADE":t.textTertiary,fontSize:12,fontWeight:700,cursor:"pointer"}}>Import</button>
+          </div>
+
+          {dataMode === "export" && (
+            <div>
+              <p style={{fontSize:10,color:t.textTertiary,margin:"0 0 6px"}}>Select all text below, copy it, and save it somewhere safe.</p>
+              <textarea ref={exportRef} value={exportJson} readOnly onFocus={e=>e.target.select()} style={{width:"100%",height:100,resize:"vertical",background:t.inputBg,border:`1px solid ${t.inputBorder}`,borderRadius:8,color:t.textSecondary,fontSize:9,fontFamily:"monospace",padding:8,boxSizing:"border-box",outline:"none"}}/>
+              <button onClick={handleCopy} style={{...btnRow,marginTop:6,marginBottom:0,justifyContent:"center",color:copied?"#5DAE63":t.text,borderColor:copied?"rgba(93,174,99,0.3)":t.borderSub,background:copied?"rgba(93,174,99,0.06)":"transparent"}}>
+                {copied ? "Copied!" : "Copy to Clipboard"}
+              </button>
+            </div>
+          )}
+
+          {dataMode === "import" && (
+            <div>
+              <p style={{fontSize:10,color:t.textTertiary,margin:"0 0 6px"}}>Paste your backup data below and restore.</p>
+              <textarea value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste backup JSON here..." style={{width:"100%",height:100,resize:"vertical",background:t.inputBg,border:`1px solid ${t.inputBorder}`,borderRadius:8,color:t.text,fontSize:9,fontFamily:"monospace",padding:8,boxSizing:"border-box",outline:"none"}}/>
+              <button onClick={handlePasteImport} style={{...btnRow,marginTop:6,marginBottom:0,justifyContent:"center",opacity:importText.trim()?1:0.4,color:"#4C9ADE",borderColor:"rgba(76,154,222,0.3)"}}>
+                Restore Backup
+              </button>
+              {importErr && <div style={{fontSize:11,color:"#DC4C3E",marginTop:6}}>{importErr}</div>}
+              {importOk && <div style={{fontSize:11,color:"#5DAE63",marginTop:6}}>Restored successfully.</div>}
+            </div>
+          )}
+
+          {!dataMode && <p style={{fontSize:9,color:t.textFaint,lineHeight:1.5,margin:"4px 0 0"}}>Backup includes all objectives, weights, notes, and settings.</p>}
+        </div>
+
+        {/* Actions */}
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onCancel} style={{flex:1,padding:10,borderRadius:10,border:`1px solid ${t.border}`,background:"transparent",color:t.textSecondary,fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+          <button onClick={handleSave} style={{flex:1,padding:10,borderRadius:10,border:"none",background:"#4C9ADE",color:"#FFF",fontSize:13,fontWeight:600,cursor:"pointer"}}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── WeekGrid (shared) ───
+const WeekGrid = ({ getColor, currentWeek, selectedWeek, onSelect, theme }) => {
+  const t = T[theme]; const COLS = 13; const rows = [];
+  for (let i = 0; i < WEEKS_TOTAL; i += COLS) rows.push(Array.from({ length: Math.min(COLS, WEEKS_TOTAL - i) }, (_, j) => i + j + 1));
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:3}}>
+      {rows.map((row, ri) => (
+        <div key={ri} style={{display:"grid",gridTemplateColumns:`repeat(${COLS},1fr)`,gap:3}}>
+          {row.map(n => {
+            const isCurrent = n === selectedWeek; const isFuture = n > currentWeek;
+            const color = getColor(n);
+            const bg = isCurrent ? "#4C9ADE" : color || (isFuture ? (theme==="dark"?"#2A2A2A":"#F0F0F0") : (theme==="dark"?"#353535":"#E4E4E4"));
+            const fg = isCurrent ? "#FFF" : color ? "#FFF" : isFuture ? t.textFaint : t.textTertiary;
+            return <div key={n} onClick={()=>n<=currentWeek&&onSelect(n)} style={{aspectRatio:"1",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,fontVariantNumeric:"tabular-nums",color:fg,background:bg,cursor:n<=currentWeek?"pointer":"default",transition:"all 0.15s ease",boxShadow:isCurrent?"0 0 0 2px rgba(76,154,222,0.35)":"none"}}>{n}</div>;
+          })}
+          {row.length<COLS&&Array.from({length:COLS-row.length},(_,i)=><div key={`e${i}`}/>)}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─── Verdict Messages ───
+const verdictMessages = {
+  solid: ["70%+ hit. You showed up and delivered.","This is what discipline looks like. Not perfect — consistent.","You said you'd do it. You did it. That's the whole game.","Solid doesn't mean easy. It means you fought through it.","This week proved your foundation is getting stronger.","No luck involved. This was all you.","The version of you from six months ago would be proud.","You didn't need motivation. You just needed the checklist.","Results compound. This week matters more than you think.","Locked in. Keep building."],
+  recovered: ["You slipped but got back up. That's not failure — that's the system working.","Recovery IS the skill. You're getting better at it.","A perfect week means nothing if you can't survive a bad one. You survived.","You didn't let one bad day become a bad week. That's growth.","Bouncing back is harder than staying on track. Respect that.","The spiral tried to pull you under. You didn't let it.","40% is better than 0%. And you know that now.","This is the week that separates you from who you used to be.","You could've quit. You didn't. Write that down.","Momentum doesn't care about perfection. It cares about showing up again."],
+  spiraled: ["Rough week. Name it, then move forward.","This week doesn't define you. What you do next week does.","You're still here. You're still tracking. That matters.","Even your worst week is data, not a death sentence.","The old you wouldn't have even logged this. You did.","One red square in a sea of green is called being human.","Don't spiral about the spiral. Just start tomorrow's checklist.","You know what went wrong. That's already half the fix.","Rock bottom is a foundation, not a grave. Build from here.","The metric isn't this week. It's how fast you get back up."],
+};
+const bodyMessages = {
+  dropping: ["The scale moved. Your discipline is real.","Lighter this week. The grind is working.","Progress is progress. Don't downplay it.","You earned this number. Keep going.","Your body is catching up to your mind."],
+  maintaining: ["Holding steady. Not every week needs a drop.","Maintenance isn't stagnation — it's stability.","The scale didn't move, but that doesn't mean you didn't.","Consistency first, results follow.","Plateaus break. Keep showing up."],
+  gaining: ["Heavier this week. Name it, don't spiral.","Weight went up. One week doesn't undo the work.","Bad weeks happen. The scale is data, not a verdict.","Don't punish yourself. Adjust and move forward.","You logged it. That's accountability. Now fix it."],
+};
+const getMsg = (msgs, week) => msgs[week % msgs.length];
+const verdictMeta = { solid: { color: "#5DAE63", label: "Solid Week" }, recovered: { color: "#E8A435", label: "Recovered" }, spiraled: { color: "#DC4C3E", label: "Spiraled" } };
+
+// ─── MAIN APP ───
+function App() {
+  const [mode, setMode] = useState("life"); // "life" | "body"
+  const [weeks, setWeeks] = useState({});
+  const [notes, setNotes] = useState({});
+  const [bodyData, setBodyData] = useState({ entries: {}, target: 75, height: 170 }); // entries: { w12: [{day:0,kg:82.5},...] }
+  const [week, setWeek] = useState(CURRENT_WEEK);
+  const [theme, setTheme] = useState("dark");
+  const [loaded, setLoaded] = useState(false);
+  const [modal, setModal] = useState(null); // obj edit
+  const [weightModal, setWeightModal] = useState(false);
+  const [editingEntry, setEditingEntry] = useState(null); // { day, kg } or null
+  const [settingsModal, setSettingsModal] = useState(false);
+  const yearOverviewRef = useRef(null);
+  const noteSaveRef = useRef(null);
+  const importingRef = useRef(false);
+
+  // ─── Load ───
+  useEffect(() => {
+    if (loaded) return;
+    (async () => {
+      try {
+        let store = null;
+        try { const r = { value: localStorage.getItem("lt-v9") }; if (r?.value) store = JSON.parse(r.value); } catch(e) {}
+        if (!store) { try { const r = { value: localStorage.getItem("lt-v8") }; if (r?.value) { const old = JSON.parse(r.value); store = { ...old, bodyData: { entries: {}, target: 75, height: 170 } }; } } catch(e) {} }
+        if (!store) { try { const r = { value: localStorage.getItem("lt-v7") }; if (r?.value) { const old = JSON.parse(r.value); const ow = old.data || {}; const oo = old.objs || DEFAULT_OBJECTIVES; const nw = {}; for (const k of Object.keys(ow)) { const w = ow[k]; nw[k] = w?.objectives && w?.counts ? w : { counts: w, objectives: JSON.parse(JSON.stringify(oo)) }; } store = { weeks: nw, notes: old.notes || {}, theme: old.theme || "dark", bodyData: { entries: {}, target: 75, height: 170 } }; } } catch(e) {} }
+        if (!store) { try { const r = { value: localStorage.getItem("lt-v6") }; if (r?.value) { const old = JSON.parse(r.value); const od = old.data || {}; const oo = old.objs || DEFAULT_OBJECTIVES; const nw = {}; for (const k of Object.keys(od)) { nw[k] = { counts: od[k], objectives: JSON.parse(JSON.stringify(oo)) }; } store = { weeks: nw, notes: old.notes || {}, theme: old.theme || "dark", bodyData: { entries: {}, target: 75, height: 170 } }; } } catch(e) {} }
+        if (store) { setWeeks(store.weeks || {}); setNotes(store.notes || {}); setTheme(store.theme || "dark"); setBodyData(store.bodyData || { entries: {}, target: 75, height: 170 }); }
+      } catch(e) {}
+      importingRef.current = false;
+      setLoaded(true);
+    })();
+  }, [loaded]);
+
+  const persist = useCallback(async (w, n, th, bd) => {
+    if (importingRef.current) return; // block persists during import
+    try { localStorage.setItem("lt-v9", JSON.stringify({ weeks: w, notes: n, theme: th, bodyData: bd })); } catch(e) {}
+  }, []);
+
+  const t = T[theme]; const wk = `w${week}`; const isCurrentWeek = week === CURRENT_WEEK;
+
+  // ─── Life Tracker state ───
+  const weekData = weeks[wk];
+  const weekObjs = weekData?.objectives?.length ? weekData.objectives : resolveObjs(weeks, week);
+  const counts = weekData?.counts || {};
+  const isHistorical = !isCurrentWeek;
+  const ensureWeek = (cw, wk2, wn) => { if (cw[wk2]?.objectives?.length) return cw; return { ...cw, [wk2]: { counts: cw[wk2]?.counts || {}, objectives: resolveObjs(cw, wn) } }; };
+  const setCount = (id, v) => { let u = ensureWeek(weeks, wk, week); u = { ...u, [wk]: { ...u[wk], counts: { ...u[wk].counts, [id]: v } } }; setWeeks(u); persist(u, notes, theme, bodyData); };
+  const saveObj = (o) => { let u = ensureWeek(weeks, wk, week); const ex = u[wk].objectives; const no = ex.find(x => x.id === o.id) ? ex.map(x => x.id === o.id ? o : x) : [...ex, o]; u = { ...u, [wk]: { ...u[wk], objectives: no } }; setWeeks(u); setModal(null); persist(u, notes, theme, bodyData); };
+  const delObj = (id) => { let u = ensureWeek(weeks, wk, week); const no = u[wk].objectives.filter(x => x.id !== id); const nc = { ...u[wk].counts }; delete nc[id]; u = { ...u, [wk]: { objectives: no, counts: nc } }; setWeeks(u); persist(u, notes, theme, bodyData); };
+  const saveReorder = (no) => { let u = ensureWeek(weeks, wk, week); u = { ...u, [wk]: { ...u[wk], objectives: no } }; setWeeks(u); setSettingsModal(false); persist(u, notes, theme, bodyData); };
+  const noteText = parseNote(notes[wk] || "");
+  const handleNoteChange = (val) => { const u = { ...notes, [wk]: val }; setNotes(u); if (noteSaveRef.current) clearTimeout(noteSaveRef.current); noteSaveRef.current = setTimeout(() => persist(weeks, u, theme, bodyData), 600); };
+  const flip = () => { const nt = theme === "light" ? "dark" : "light"; setTheme(nt); persist(weeks, notes, nt, bodyData); };
+
+  // Life verdicts
+  const wkVerdictFor = (key) => { const w = weeks[key]; if (!w?.objectives?.length) return null; const c = w.counts || {}; if (!Object.values(c).some(v => v > 0)) return null; return getVerdict(w.objectives, c); };
+  const verdict = weekObjs.length ? getVerdict(weekObjs, counts) : null;
+  const hasAnyCounts = Object.values(counts).some(v => v > 0);
+  const displayVerdict = hasAnyCounts ? verdict : null;
+  const metN = weekObjs.filter(o => (counts[o.id] || 0) >= o.target).length;
+  const excN = weekObjs.filter(o => (counts[o.id] || 0) > o.target).length;
+  const allWeeks = Array.from({ length: WEEKS_TOTAL }, (_, i) => i + 1);
+  const gW = allWeeks.filter(n => wkVerdictFor(`w${n}`) === "solid").length;
+  const yW = allWeeks.filter(n => wkVerdictFor(`w${n}`) === "recovered").length;
+  const rW = allWeeks.filter(n => wkVerdictFor(`w${n}`) === "spiraled").length;
+
+  // ─── Body Tracker state ───
+  const bEntries = bodyData.entries[wk] || [];
+  const bTarget = bodyData.target || 0;
+  const lastWeekEntries = bodyData.entries[`w${week - 1}`] || [];
+  const latestEntry = bEntries.length ? bEntries[bEntries.length - 1] : null;
+  const lastWeekLatest = lastWeekEntries.length ? lastWeekEntries[lastWeekEntries.length - 1] : null;
+  const currentKg = latestEntry?.kg || null;
+  const lastKg = lastWeekLatest?.kg || null;
+  const diff = currentKg && lastKg ? Math.round((currentKg - lastKg) * 10) / 10 : null;
+  const left = currentKg && bTarget ? Math.round((currentKg - bTarget) * 10) / 10 : null;
+
+  const bodyVerdict = diff === null ? null : diff < -0.2 ? "dropping" : diff > 0.2 ? "gaining" : "maintaining";
+  const bodyVerdictColors = { dropping: "#5DAE63", maintaining: "#E8A435", gaining: "#DC4C3E" };
+  const bodyVerdictLabels = { dropping: "Dropping", maintaining: "Maintaining", gaining: "Gained" };
+
+  const saveWeight = (kg, dayIdx) => {
+    const existing = [...bEntries];
+    const found = existing.findIndex(e => e.day === dayIdx);
+    if (found >= 0) existing[found] = { day: dayIdx, kg }; else existing.push({ day: dayIdx, kg });
+    existing.sort((a, b) => a.day - b.day);
+    const newBd = { ...bodyData, entries: { ...bodyData.entries, [wk]: existing } };
+    setBodyData(newBd); setWeightModal(false); setEditingEntry(null); persist(weeks, notes, theme, newBd);
+  };
+
+  const deleteWeight = (dayIdx) => {
+    const existing = bEntries.filter(e => e.day !== dayIdx);
+    const newBd = { ...bodyData, entries: { ...bodyData.entries, [wk]: existing } };
+    setBodyData(newBd); setWeightModal(false); setEditingEntry(null); persist(weeks, notes, theme, newBd);
+  };
+
+  const saveBodySettings = (tgt) => {
+    const newBd = { ...bodyData, target: tgt };
+    setBodyData(newBd); setSettingsModal(false); persist(weeks, notes, theme, newBd);
+  };
+
+  const importData = async (data) => {
+    // Lock all persists so nothing can overwrite during reload
+    importingRef.current = true;
+    // Clear any pending debounced saves
+    if (noteSaveRef.current) { clearTimeout(noteSaveRef.current); noteSaveRef.current = null; }
+    // Build payload
+    const payload = {
+      weeks: data.weeks || {},
+      notes: data.notes || {},
+      theme: data.theme || "dark",
+      bodyData: data.bodyData || { entries: {}, target: 75, height: 170 },
+    };
+    // Write to storage
+    try { localStorage.setItem("lt-v9", JSON.stringify(payload)); } catch(e) {}
+    // Close modal and trigger full state reload from storage
+    setSettingsModal(false);
+    setLoaded(false);
+  };
+
+  // All entries across all weeks for chart
+  const allBodyEntries = [];
+  for (let n = 1; n <= week; n++) {
+    const ents = bodyData.entries[`w${n}`] || [];
+    ents.forEach(e => allBodyEntries.push({ ...e, week: n }));
+  }
+  const recentEntries = allBodyEntries.slice(-12);
+
+  // Body week grid color
+  const bodyWeekColor = (n) => {
+    const ents = bodyData.entries[`w${n}`] || [];
+    const prevEnts = bodyData.entries[`w${n - 1}`] || [];
+    if (!ents.length) return null;
+    if (!prevEnts.length) return "#E8A435"; // first week logged, no comparison — neutral
+    const cur = ents[ents.length - 1].kg;
+    const prev = prevEnts[prevEnts.length - 1].kg;
+    const d = cur - prev;
+    return d < -0.2 ? "#5DAE63" : d > 0.2 ? "#DC4C3E" : "#E8A435";
+  };
+
+  // Life week grid color
+  const lifeWeekColor = (n) => {
+    const v = wkVerdictFor(`w${n}`);
+    if (!v) return null;
+    return { solid: "#5DAE63", recovered: "#E8A435", spiraled: "#DC4C3E" }[v];
+  };
+
+  if (!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:t.bg,color:t.textTertiary,fontSize:14}}>Loading...</div>;
+
+  // ─── RENDER ───
+  return (
+    <div style={{minHeight:"100vh",background:t.bg,padding:"32px 16px",maxWidth:500,margin:"0 auto",transition:"background 0.2s"}}>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet"/>
+      <style>{`*{font-family:'Inter',system-ui,sans-serif;box-sizing:border-box}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield}`}</style>
+
+      {modal && <Modal obj={modal.obj||null} theme={theme} onSave={saveObj} onCancel={()=>setModal(null)}/>}
+      {weightModal && <WeightModal value={editingEntry?.kg || currentKg || 80} target={bTarget} theme={theme} onSave={saveWeight} onCancel={()=>{setWeightModal(false);setEditingEntry(null)}} editEntry={editingEntry} onDelete={deleteWeight} selectedWeek={week}/>}
+      {settingsModal && <SettingsModal target={bTarget} theme={theme} onSave={saveBodySettings} onCancel={()=>setSettingsModal(false)} allData={{weeks,notes,theme,bodyData}} onImport={importData} mode={mode} objs={weekObjs} counts={counts} onReorder={saveReorder} isHistorical={isHistorical}/>}
+
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:32}}>
+        <div>
+          <h1 onClick={()=>setMode(mode==="life"?"body":"life")} style={{fontSize:22,fontWeight:800,color:t.text,margin:0,letterSpacing:-0.5,cursor:"pointer",borderBottom:`2px solid ${mode==="life"?"#DC4C3E":"#4C9ADE"}`,paddingBottom:2,transition:"border-color 0.2s"}}>
+            {mode==="life"?"Life Tracker":"Body Tracker"}
+          </h1>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
+            <p onClick={()=>yearOverviewRef.current?.scrollIntoView({behavior:"smooth",block:"start"})} style={{fontSize:12,color:t.textTertiary,margin:0,fontWeight:500,cursor:"pointer",borderBottom:`1px dashed ${t.borderSub}`}}>
+              {(() => {
+                const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                const yearStart = new Date(2026, 0, 1);
+                const jan1Day = yearStart.getDay() === 0 ? 6 : yearStart.getDay() - 1;
+                const offset = (week - 1) * 7 - jan1Day;
+                const mon = new Date(2026, 0, 1 + offset);
+                const sun = new Date(2026, 0, 1 + offset + 6);
+                const sameMonth = mon.getMonth() === sun.getMonth();
+                return `Week ${week} · ${mon.getDate()} ${sameMonth ? "" : MONTHS[mon.getMonth()] + " - "}${sameMonth ? "- " + sun.getDate() + " " : sun.getDate() + " "}${MONTHS[sun.getMonth()]} 2026`;
+              })()}
+            </p>
+            {!isCurrentWeek&&<span style={{fontSize:9,fontWeight:700,color:t.textTertiary,background:theme==="dark"?"rgba(255,255,255,0.08)":"rgba(0,0,0,0.06)",padding:"2px 7px",borderRadius:4,letterSpacing:0.4}}>READ ONLY</span>}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {!isCurrentWeek&&<button onClick={()=>setWeek(CURRENT_WEEK)} style={{width:38,height:38,borderRadius:10,border:`1px solid ${t.border}`,background:t.card,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Back to current week">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.textTertiary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="12" cy="16" r="1.5" fill={t.textTertiary} stroke="none"/></svg>
+          </button>}
+          <button onClick={()=>setSettingsModal(true)} style={{width:38,height:38,borderRadius:10,border:`1px solid ${t.border}`,background:t.card,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.textTertiary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+          <button onClick={flip} style={{width:38,height:38,borderRadius:10,border:`1px solid ${t.border}`,background:t.card,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>{theme==="light"?"🌙":"☀️"}</button>
+        </div>
+      </div>
+
+      {/* ═══════════ LIFE TRACKER MODE ═══════════ */}
+      {mode === "life" && <>
+        <div style={{background:t.card,borderRadius:14,border:`1px solid ${t.border}`,marginBottom:20,overflow:"hidden"}}>
+          <div style={{padding:"16px 16px 0",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <h2 style={{fontSize:14,fontWeight:700,color:t.text,margin:0}}>Objectives</h2>
+            {isHistorical&&<span style={{fontSize:10,fontWeight:600,color:t.textTertiary,fontStyle:"italic"}}>Snapshot from Week {week}</span>}
+          </div>
+          {weekObjs.map(o=>(<ObjRow key={o.id} obj={o} count={counts[o.id]||0} onSet={setCount} theme={theme} onEdit={()=>!isHistorical&&setModal({obj:o})} onDelete={()=>delObj(o.id)} isHistorical={isHistorical}/>))}
+          {!isHistorical&&<button onClick={()=>setModal({})} style={{width:"100%",padding:"14px 16px",background:"transparent",border:"none",borderTop:`1px solid ${t.borderSub}`,color:t.textTertiary,fontSize:13,fontWeight:600,cursor:"pointer",textAlign:"left"}}>+ Add objective</button>}
+          <div style={{padding:isHistorical?"14px 16px 16px":"0 16px 16px"}}>
+            <div style={{display:"flex",gap:12,marginBottom:12,fontSize:12,fontWeight:600}}>
+              <span style={{color:"#5DAE63"}}>{metN} met</span>
+              {excN>0&&<span style={{color:GOLD}}>{excN} exceeded</span>}
+              <span style={{color:t.textTertiary}}>{weekObjs.length-metN} remaining</span>
+            </div>
+            {displayVerdict&&(
+              <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:10,background:theme==="dark"?`${verdictMeta[displayVerdict].color}15`:`${verdictMeta[displayVerdict].color}10`,border:`1px solid ${verdictMeta[displayVerdict].color}30`,marginBottom:12}}>
+                <div style={{width:10,height:10,borderRadius:"50%",background:verdictMeta[displayVerdict].color,flexShrink:0}}/>
+                <div><div style={{fontSize:13,fontWeight:700,color:verdictMeta[displayVerdict].color}}>{verdictMeta[displayVerdict].label}</div><div style={{fontSize:11,color:t.textSecondary,marginTop:1}}>{getMsg(verdictMessages[displayVerdict],week)}</div></div>
+              </div>
+            )}
+            <div style={{paddingTop:10,borderTop:`1px solid ${t.borderSub}`}}>
+              <div style={{fontSize:10,fontWeight:600,color:t.textFaint,marginBottom:6,letterSpacing:0.3}}>How it works</div>
+              <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                {[{dot:"#5DAE63",t:"Solid",d:"70%+ objectives met"},{dot:"#E8A435",t:"Recovered",d:"40–69% — bounced back"},{dot:"#DC4C3E",t:"Spiraled",d:"Under 40%"}].map(v=>(
+                  <div key={v.t} style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:8,height:8,borderRadius:"50%",background:v.dot,flexShrink:0}}/><span style={{fontSize:11,color:t.textSecondary}}><span style={{fontWeight:700,color:v.dot}}>{v.t}</span> — {v.d}</span></div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </>}
+
+      {/* ═══════════ BODY TRACKER MODE ═══════════ */}
+      {mode === "body" && <>
+        {/* Current Weight + Progress — single combined card */}
+        <div style={{background:t.card,borderRadius:14,border:`1px solid ${t.border}`,padding:16,marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
+            {currentKg ? (() => {
+              const distFromTarget = currentKg - bTarget;
+              const absD = Math.abs(distFromTarget);
+              const status = absD <= 3 ? "healthy" : absD <= 8 ? "caution" : "danger";
+              const statusLabel = status === "healthy" ? "On Track" : distFromTarget > 0 ? "Over Target" : "Under Target";
+              return <>
+                <h2 style={{fontSize:16,fontWeight:800,color:t.text,margin:0}}>{statusLabel}</h2>
+                <div style={{display:"flex",alignItems:"baseline",gap:3}}>
+                  <span style={{fontSize:28,fontWeight:800,color:t.text,letterSpacing:-1,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>{currentKg}</span>
+                  <span style={{fontSize:12,fontWeight:600,color:t.textTertiary}}>kg</span>
+                </div>
+              </>;
+            })() : (
+              <h2 style={{fontSize:16,fontWeight:800,color:t.text,margin:0}}>Current Weight</h2>
+            )}
+          </div>
+          <p style={{fontSize:11,color:t.textTertiary,margin:"0 0 14px"}}>{isCurrentWeek ? "Tap to log or update your weight." : `Viewing week ${week} data.`}</p>
+
+          <div onClick={isCurrentWeek?()=>{setEditingEntry(null);setWeightModal(true)}:undefined} style={{cursor:isCurrentWeek?"pointer":"default"}}>
+            {currentKg ? (() => {
+              const gaugeMin = bTarget - 20 > 30 ? bTarget - 20 : 30;
+              const gaugeMax = bTarget + 20 < 200 ? bTarget + 20 : 200;
+              const gaugeRange = gaugeMax - gaugeMin;
+              const markerPct = Math.max(1, Math.min(99, ((currentKg - gaugeMin) / gaugeRange) * 100));
+              const greenL = Math.max(0, ((bTarget - 3 - gaugeMin) / gaugeRange) * 100);
+              const greenR = Math.min(100, ((bTarget + 3 - gaugeMin) / gaugeRange) * 100);
+              const yellowL = Math.max(0, ((bTarget - 8 - gaugeMin) / gaugeRange) * 100);
+              const yellowR = Math.min(100, ((bTarget + 8 - gaugeMin) / gaugeRange) * 100);
+              const grad = `linear-gradient(90deg, #DC4C3E 0%, #DC4C3E ${yellowL}%, #E8A435 ${yellowL}%, #E8A435 ${greenL}%, #5DAE63 ${greenL}%, #5DAE63 ${greenR}%, #E8A435 ${greenR}%, #E8A435 ${yellowR}%, #DC4C3E ${yellowR}%, #DC4C3E 100%)`;
+
+              return <>
+                {/* Bar — tall gradient */}
+                <div style={{position:"relative",marginBottom:4}}>
+                  <div style={{height:20,borderRadius:10,background:grad,opacity:0.85}}/>
+                  <div style={{position:"absolute",top:-3,left:`${markerPct}%`,transform:"translateX(-50%)",width:5,height:26,background:t.text,borderRadius:3,boxShadow:"0 0 6px rgba(0,0,0,0.35)"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:3,marginBottom:14}}>
+                  <span style={{fontSize:9,fontWeight:600,color:t.textFaint}}>{Math.round(gaugeMin)}</span>
+                  <span style={{fontSize:9,fontWeight:600,color:"#5DAE63"}}>{bTarget}</span>
+                  <span style={{fontSize:9,fontWeight:600,color:t.textFaint}}>{Math.round(gaugeMax)}</span>
+                </div>
+
+                {/* Metric badges */}
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {diff !== null && (
+                    <span style={{fontSize:11,fontWeight:700,padding:"5px 12px",borderRadius:20,background:diff<0?"rgba(93,174,99,0.12)":diff>0?"rgba(220,76,62,0.12)":"rgba(232,164,53,0.12)",color:diff<0?"#5DAE63":diff>0?"#DC4C3E":"#E8A435",border:`1px solid ${diff<0?"rgba(93,174,99,0.2)":diff>0?"rgba(220,76,62,0.2)":"rgba(232,164,53,0.2)"}`}}>
+                      Change: {diff>0?"+":""}{diff} kg
+                    </span>
+                  )}
+                  {bTarget > 0 && (
+                    <span style={{fontSize:11,fontWeight:700,padding:"5px 12px",borderRadius:20,background:"rgba(76,154,222,0.1)",color:"#4C9ADE",border:"1px solid rgba(76,154,222,0.2)"}}>
+                      Target: {bTarget} kg
+                    </span>
+                  )}
+                  {lastKg && (
+                    <span style={{fontSize:11,fontWeight:700,padding:"5px 12px",borderRadius:20,background:theme==="dark"?"rgba(255,255,255,0.06)":"rgba(0,0,0,0.04)",color:t.textSecondary,border:`1px solid ${t.borderSub}`}}>
+                      Last Week: {lastKg} kg
+                    </span>
+                  )}
+                </div>
+              </>;
+            })() : (
+              <div style={{padding:"16px 0",textAlign:"center"}}>
+                <div style={{fontSize:13,fontWeight:600,color:t.textTertiary}}>Tap to log your first weight</div>
+              </div>
+            )}
+          </div>
+
+          {/* Progress chart — inside same card, bleeds to edges */}
+          {recentEntries.length > 1 && (
+            <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${t.borderSub}`}}>
+              <div style={{fontSize:12,fontWeight:700,color:t.text,marginBottom:4}}>Progress</div>
+              <div style={{margin:"0 -16px",overflow:"hidden"}}>
+                <MiniChart entries={recentEntries} target={bTarget} theme={theme}/>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Verdict */}
+        {bodyVerdict && (
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:10,background:`${bodyVerdictColors[bodyVerdict]}10`,border:`1px solid ${bodyVerdictColors[bodyVerdict]}25`,marginBottom:12}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:bodyVerdictColors[bodyVerdict],flexShrink:0}}/>
+            <div style={{flex:1}}><span style={{fontSize:12,fontWeight:700,color:bodyVerdictColors[bodyVerdict]}}>{bodyVerdictLabels[bodyVerdict]}</span><span style={{fontSize:11,color:t.textSecondary,marginLeft:8}}>{getMsg(bodyMessages[bodyVerdict],week)}</span></div>
+          </div>
+        )}
+
+        {/* History */}
+        <div style={{background:t.card,borderRadius:14,border:`1px solid ${t.border}`,padding:16,marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+            <h2 style={{fontSize:14,fontWeight:700,color:t.text,margin:0}}>History</h2>
+            {isCurrentWeek&&<button onClick={(e)=>{e.stopPropagation();setEditingEntry(null);setWeightModal(true)}} style={{background:"transparent",border:"none",color:"#4C9ADE",fontSize:12,fontWeight:700,cursor:"pointer",padding:0}}>+ New Weight</button>}
+          </div>
+          <p style={{fontSize:11,color:t.textTertiary,margin:"0 0 10px"}}>Tap an entry to edit or delete it.</p>
+          {bEntries.length === 0 ? (
+            <p style={{fontSize:12,color:t.textTertiary,margin:0}}>No entries this week.</p>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {[...bEntries].reverse().map((e, i, arr) => {
+                const prevEntry = i < arr.length - 1 ? arr[i + 1] : null;
+                const d = prevEntry ? Math.round((e.kg - prevEntry.kg) * 10) / 10 : null;
+                const isLatest = i === 0;
+                return (
+                  <div key={i} onClick={isCurrentWeek?()=>{setEditingEntry(e);setWeightModal(true)}:undefined} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",background:t.inputBg,borderRadius:10,border:isLatest?`1px solid ${t.border}`:"1px solid transparent",cursor:isCurrentWeek?"pointer":"default",transition:"background 0.15s"}}
+                    onMouseEnter={isCurrentWeek?ev=>ev.currentTarget.style.background=t.borderSub:undefined} onMouseLeave={isCurrentWeek?ev=>ev.currentTarget.style.background=t.inputBg:undefined}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:isLatest?t.text:t.textSecondary}}>{DAYS[e.day]}</div>
+                      {d !== null && d !== 0 ? (
+                        <div style={{fontSize:11,fontWeight:600,color:d<0?"#5DAE63":"#DC4C3E",marginTop:2,display:"flex",alignItems:"center",gap:3}}>
+                          <span>{d < 0 ? "↓" : "↑"}</span>{Math.abs(d)} kg
+                        </div>
+                      ) : (
+                        <div style={{fontSize:11,color:t.textFaint,marginTop:2}}>—</div>
+                      )}
+                    </div>
+                    <span style={{fontSize:20,fontWeight:800,color:isLatest?t.text:t.textSecondary,fontVariantNumeric:"tabular-nums",letterSpacing:-0.5}}>{e.kg} <span style={{fontSize:11,fontWeight:600,color:t.textTertiary}}>kg</span></span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </>}
+
+      {/* ═══════════ SHARED: Journal ═══════════ */}
+      <div style={{background:t.noteBg,borderRadius:14,border:`1px solid ${t.noteBorder}`,padding:"12px 16px",marginBottom:20}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+          <h2 style={{fontSize:14,fontWeight:700,color:t.text,margin:0}}>Journal</h2>
+          <span style={{fontSize:11,color:t.textTertiary,fontWeight:500}}>Reflect on week {week}</span>
+        </div>
+        <textarea value={noteText} onChange={e=>handleNoteChange(e.target.value)} placeholder="What happened this week?" rows={2} style={{width:"100%",minHeight:48,maxHeight:200,resize:"vertical",background:"transparent",border:"none",outline:"none",color:t.text,fontSize:13,lineHeight:1.75,fontFamily:JOURNAL_FONT,fontWeight:400,padding:0,boxSizing:"border-box",letterSpacing:0.1}}/>
+      </div>
+
+      {/* ═══════════ SHARED: Year Overview ═══════════ */}
+      <div ref={yearOverviewRef} style={{background:t.card,borderRadius:14,border:`1px solid ${t.border}`,padding:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+          <h2 style={{fontSize:14,fontWeight:700,color:t.text,margin:0}}>Year Overview</h2>
+          {mode==="life"&&(gW+yW+rW)>0&&<span style={{fontSize:11,color:t.textTertiary,fontWeight:500}}>{gW}s &middot; {yW}r &middot; {rW}sp</span>}
+        </div>
+        <p style={{fontSize:11,color:t.textTertiary,margin:"0 0 12px"}}>Tap any past week to review it.</p>
+        <WeekGrid getColor={mode==="life"?lifeWeekColor:bodyWeekColor} currentWeek={CURRENT_WEEK} selectedWeek={week} onSelect={setWeek} theme={theme}/>
+        <div style={{display:"flex",gap:14,marginTop:14,paddingTop:10,borderTop:`1px solid ${t.borderSub}`,flexWrap:"wrap"}}>
+          {mode==="life" ? (
+            [{c:"#5DAE63",l:"Solid"},{c:"#E8A435",l:"Recovered"},{c:"#DC4C3E",l:"Spiraled"},{c:"#4C9ADE",l:"Current"}].map(x=>(<div key={x.l} style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,borderRadius:4,background:x.c}}/><span style={{fontSize:10,fontWeight:600,color:t.textTertiary}}>{x.l}</span></div>))
+          ) : (
+            [{c:"#5DAE63",l:"Dropped"},{c:"#E8A435",l:"Maintained"},{c:"#DC4C3E",l:"Gained"},{c:"#4C9ADE",l:"Current"}].map(x=>(<div key={x.l} style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,borderRadius:4,background:x.c}}/><span style={{fontSize:10,fontWeight:600,color:t.textTertiary}}>{x.l}</span></div>))
+          )}
+        </div>
+      </div>
+
+      <p style={{textAlign:"center",marginTop:24,fontSize:11,color:t.textFaint,fontWeight:500,letterSpacing:0.5}}>
+        {mode==="life" ? "The metric isn't your streak. It's how fast you get back up." : "The scale is data, not a verdict. Track it, own it, move."}
+      </p>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
