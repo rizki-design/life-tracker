@@ -138,18 +138,10 @@ Export via Settings → Export Data. Import via Settings → Restore from Backup
 ## Roadmap
 
 - [ ] Cross-device sync (currently manual via export/import)
-- [ ] Chart expansion with more metrics (BF%, muscle mass, measurements)
+- [ ] Import/Sync with body scanner data Chart expansion with more metrics (BF%, muscle mass, measurements)
 - [ ] Weekly / monthly check-in flow for setting upcoming priorities
 - [ ] Custom objective icons
 - [ ] Light mode refinements
-
----
-
-## Acknowledgments
-
-This app exists because off-the-shelf habit trackers punish the wrong failure mode. It's opinionated software for a specific use case — personal weekly discipline for someone who catastrophizes easily — and it may not be for you. That's fine.
-
-Inspired in spirit by *Atomic Habits*, the color grammar of *Way of Life*, and the single-file craftsmanship of apps like Excalidraw.
 
 ---
 
