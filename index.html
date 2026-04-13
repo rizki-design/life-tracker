@@ -81,6 +81,8 @@ const JOURNAL_FONT = "'Lora', Georgia, serif";
 
 function getVerdict(objs, counts) {
   if (!objs.length) return null;
+  const allMaxed = objs.every(o => (counts[o.id] || 0) >= o.max);
+  if (allMaxed) return "locked";
   const met = objs.filter(o => (counts[o.id] || 0) >= o.target).length;
   const r = met / objs.length;
   if (r >= 0.7) return "solid"; if (r >= 0.4 || met > 0) return "recovered"; return "spiraled";
@@ -111,9 +113,11 @@ const Confetti = ({ active, onDone }) => {
 
 const Dot = ({ filled, exceeded, color, theme, onClick, size=24 }) => {
   const t = T[theme];
+  const bg = filled ? (exceeded ? color : color) : "transparent";
+  const brd = filled ? color : t.dotBorder;
   return (
-    <div onClick={onClick} style={{width:size,height:size,borderRadius:"50%",border:`2px solid ${filled?(exceeded?GOLD:color):t.dotBorder}`,background:filled?(exceeded?GOLD:color):"transparent",cursor:onClick?"pointer":"default",transition:"all 0.15s ease",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-      {filled&&<svg width={size*0.5} height={size*0.5} viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke={exceeded?"#1A1A1A":"#FFF"} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+    <div onClick={onClick} style={{width:size,height:size,borderRadius:"50%",border:`2px solid ${brd}`,background:bg,opacity:filled&&exceeded?0.55:1,cursor:onClick?"pointer":"default",transition:"all 0.15s ease",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+      {filled&&<svg width={size*0.5} height={size*0.5} viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke="#FFF" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
     </div>
   );
 };
@@ -131,8 +135,8 @@ const ObjRow = ({ obj, count, onSet, theme, onEdit, onDelete, isHistorical }) =>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
         <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}}>
           <span onClick={onEdit} style={{fontSize:14,fontWeight:600,color:met?c.color:t.text,letterSpacing:-0.2,cursor:isHistorical?"default":"pointer",borderBottom:isHistorical?"none":`1px dashed ${t.borderSub}`,paddingBottom:1}}>{obj.label}</span>
-          {maxed&&<span style={{fontSize:10,fontWeight:700,color:GOLD,animation:"pulse 2s infinite"}}>MAXED</span>}
-          {exceeded&&!maxed&&<span style={{fontSize:10,fontWeight:600,color:GOLD}}>{tag}</span>}
+          {maxed&&<span style={{fontSize:10,fontWeight:700,color:c.color,animation:"pulse 2s infinite"}}>MAXED</span>}
+          {exceeded&&!maxed&&<span style={{fontSize:10,fontWeight:600,color:c.color,opacity:0.8}}>{tag}</span>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:2}}>
           <span style={{fontSize:10,fontWeight:600,color:c.color,background:theme==="dark"?c.soft.dark:c.soft.light,padding:"2px 8px",borderRadius:4}}>{CAT_LABELS[obj.category]}</span>
@@ -144,7 +148,7 @@ const ObjRow = ({ obj, count, onSet, theme, onEdit, onDelete, isHistorical }) =>
           {Array.from({length:obj.max},(_,i)=>{const showGoalLine=i===obj.target-1&&obj.target<obj.max;return(<div key={i} style={{display:"flex",alignItems:"center"}}><Dot filled={i<count} exceeded={i>=obj.target} color={c.color} theme={theme} onClick={isHistorical?undefined:()=>onSet(obj.id,count===i+1?i:i+1)}/>{showGoalLine&&<div style={{width:2,height:32,background:t.goalLine,borderRadius:1,marginLeft:8,marginRight:4,opacity:0.2}}/>}{!showGoalLine&&i<obj.max-1&&<div style={{width:8}}/>}</div>)})}
         </div>
         <div onClick={!isHistorical&&count>0?()=>onSet(obj.id,0):undefined} style={{display:"flex",alignItems:"baseline",gap:2,flexShrink:0,cursor:!isHistorical&&count>0?"pointer":"default",borderRadius:6,padding:"2px 6px",margin:"-2px -6px",transition:"background 0.15s",background:"transparent"}} onMouseEnter={e=>{if(!isHistorical&&count>0)e.currentTarget.style.background=t.borderSub}} onMouseLeave={e=>{e.currentTarget.style.background="transparent"}}>
-          <span style={{fontSize:16,fontWeight:700,fontVariantNumeric:"tabular-nums",color:met?(exceeded?GOLD:c.color):t.textTertiary}}>{count}</span>
+          <span style={{fontSize:16,fontWeight:700,fontVariantNumeric:"tabular-nums",color:met?c.color:t.textTertiary}}>{count}</span>
           <span style={{fontSize:11,color:t.textTertiary,fontWeight:500}}>/{obj.target}</span>
         </div>
       </div>
@@ -289,32 +293,54 @@ const MiniChart = ({ entries, target, theme }) => {
   const t = T[theme];
   if (!entries.length) return null;
   const vals = entries.map(e => e.kg);
-  const dataMin = Math.min(...vals, target || Infinity);
-  const dataMax = Math.max(...vals, target || 0);
+  const dataMin = Math.min(...vals, target > 0 ? target : Infinity);
+  const dataMax = Math.max(...vals, target > 0 ? target : -Infinity);
   const min = Math.floor(dataMin - 2);
   const max = Math.ceil(dataMax + 2);
   const range = max - min || 1;
 
-  const W = 320; const H = 150;
-  const padL = 28; const padR = 8; const padT = 24; const padB = 22;
+  const W = 320; const H = 160;
+  const padL = 30; const padR = 10; const padT = 24; const padB = 26;
   const chartW = W - padL - padR; const chartH = H - padT - padB;
 
+  const fmtDDMM = d => `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
+
   const points = entries.map((e, i) => ({
-    x: padL + (i / Math.max(entries.length - 1, 1)) * chartW,
+    x: padL + (entries.length === 1 ? chartW / 2 : (i / (entries.length - 1)) * chartW),
     y: padT + (1 - (e.kg - min) / range) * chartH,
-    kg: e.kg, day: DAYS[e.day] || `W${e.week}`,
+    kg: e.kg, date: e.date,
   }));
-  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
-  const area = line + ` L${points[points.length-1].x},${padT+chartH} L${points[0].x},${padT+chartH} Z`;
+
+  // Single-point chart: just show dot + label
+  const line = points.length > 1 ? points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ") : "";
+  const area = points.length > 1 ? line + ` L${points[points.length-1].x},${padT+chartH} L${points[0].x},${padT+chartH} Z` : "";
   const targetY = target > 0 ? padT + (1 - (target - min) / range) * chartH : null;
 
+  // Y-axis labels: 3 steps
   const ySteps = 3;
   const yLabels = Array.from({ length: ySteps + 1 }, (_, i) => Math.round(min + (i / ySteps) * (max - min)));
+
+  // Smart X-axis label density:
+  // ≤8 pts: every point
+  // 9–16: every other
+  // 17–32: every 4th
+  // 33+: roughly monthly (~every 8th for weekly data)
+  // Always show first and last.
+  const n = points.length;
+  let step;
+  if (n <= 8) step = 1;
+  else if (n <= 16) step = 2;
+  else if (n <= 32) step = 4;
+  else step = Math.max(8, Math.ceil(n / 6));
+  const labelIdx = new Set();
+  for (let i = 0; i < n; i += step) labelIdx.add(i);
+  labelIdx.add(0);
+  labelIdx.add(n - 1);
 
   const lastP = points[points.length - 1];
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:150,display:"block"}}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:160,display:"block"}}>
       {/* Grid lines + Y labels */}
       {yLabels.map((v, i) => {
         const y = padT + (1 - (v - min) / range) * chartH;
@@ -329,7 +355,7 @@ const MiniChart = ({ entries, target, theme }) => {
       {targetY !== null && <line x1={padL} y1={targetY} x2={W-padR} y2={targetY} stroke="#5DAE63" strokeWidth="1" strokeDasharray="4 3" opacity="0.4"/>}
       {targetY !== null && <text x={W-padR} y={targetY - 4} textAnchor="end" fontSize="7" fontWeight="700" fill="#5DAE63" opacity="0.6">Goal</text>}
       {/* Area fill */}
-      <path d={area} fill="url(#areaGrad)" opacity="0.15"/>
+      {points.length > 1 && <path d={area} fill="url(#areaGrad)" opacity="0.15"/>}
       <defs>
         <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#4C9ADE"/>
@@ -337,8 +363,8 @@ const MiniChart = ({ entries, target, theme }) => {
         </linearGradient>
       </defs>
       {/* Line */}
-      <path d={line} fill="none" stroke="#4C9ADE" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      {/* Dots — small for intermediate, larger for last */}
+      {points.length > 1 && <path d={line} fill="none" stroke="#4C9ADE" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>}
+      {/* Dots */}
       {points.map((p, i) => (
         <circle key={i} cx={p.x} cy={p.y} r={i === points.length - 1 ? 5 : 3} fill="#4C9ADE" stroke={t.card} strokeWidth={i === points.length - 1 ? 2.5 : 1.5}/>
       ))}
@@ -349,11 +375,51 @@ const MiniChart = ({ entries, target, theme }) => {
           <text x={lastP.x} y={lastP.y - 15} textAnchor="middle" fontSize="10" fontWeight="700" fill={t.text}>{lastP.kg}</text>
         </g>
       )}
-      {/* X labels */}
-      {points.map((p, i) => (
-        <text key={i} x={p.x} y={H - 4} textAnchor="middle" fontSize="8" fontWeight="600" fill={t.textFaint}>{p.day}</text>
-      ))}
+      {/* X labels (DD/MM, smart density) */}
+      {points.map((p, i) => labelIdx.has(i) ? (
+        <text key={i} x={p.x} y={H - 6} textAnchor="middle" fontSize="8" fontWeight="600" fill={t.textFaint}>{fmtDDMM(p.date)}</text>
+      ) : null)}
     </svg>
+  );
+};
+
+// ─── Verdict Override Modal ───
+const VerdictModal = ({ theme, currentVerdict, autoVerdict, onSet, onCancel, week }) => {
+  const t = T[theme];
+  const options = [
+    { key: "locked", label: "Locked In", desc: "Every objective maxed out" },
+    { key: "solid", label: "Solid", desc: "A strong week, most things hit" },
+    { key: "recovered", label: "Recovered", desc: "Slipped but bounced back" },
+    { key: "spiraled", label: "Spiraled", desc: "A rough week, it happens" },
+  ];
+  return (
+    <div onClick={onCancel} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16,backdropFilter:"blur(4px)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:t.card,borderRadius:14,padding:20,width:"100%",maxWidth:360,border:`1px solid ${t.border}`,boxShadow:"0 16px 48px rgba(0,0,0,0.2)",maxHeight:"85vh",overflowY:"auto"}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:t.text,margin:"0 0 4px"}}>How did Week {week} actually feel?</h3>
+        <p style={{fontSize:11,color:t.textTertiary,margin:"0 0 14px",lineHeight:1.5}}>You know this week better than the math does. Pick what matches.</p>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {options.map(o => {
+            const color = verdictMeta[o.key].color;
+            const isSelected = currentVerdict === o.key;
+            const isAuto = autoVerdict === o.key;
+            return (
+              <button key={o.key} onClick={()=>onSet(o.key)} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:10,background:isSelected?(theme==="dark"?`${color}20`:`${color}12`):t.inputBg,border:`1px solid ${isSelected?color:"transparent"}`,cursor:"pointer",textAlign:"left",transition:"all 0.15s"}}>
+                <div style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,color:isSelected?color:t.text,display:"flex",alignItems:"center",gap:6}}>
+                    {o.label}
+                    {isAuto&&<span style={{fontSize:9,fontWeight:600,color:t.textTertiary,background:theme==="dark"?"rgba(255,255,255,0.06)":"rgba(0,0,0,0.05)",padding:"1px 6px",borderRadius:3,letterSpacing:0.3}}>SUGGESTED</span>}
+                  </div>
+                  <div style={{fontSize:11,color:t.textSecondary,marginTop:1}}>{o.desc}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={()=>onSet(null)} style={{width:"100%",marginTop:10,padding:"10px",background:"transparent",border:`1px solid ${t.border}`,borderRadius:10,color:t.textSecondary,fontSize:12,fontWeight:600,cursor:"pointer"}}>Use suggested ({autoVerdict ? verdictMeta[autoVerdict].label : "none"})</button>
+        <button onClick={onCancel} style={{width:"100%",marginTop:6,padding:"10px",background:"transparent",border:"none",color:t.textTertiary,fontSize:12,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+      </div>
+    </div>
   );
 };
 
@@ -410,7 +476,10 @@ const SettingsModal = ({ target, theme, onSave, onCancel, allData, onImport, mod
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16,backdropFilter:"blur(4px)"}}>
       <div style={{background:t.card,borderRadius:14,padding:20,width:"100%",maxWidth:360,border:`1px solid ${t.border}`,boxShadow:"0 16px 48px rgba(0,0,0,0.2)",maxHeight:"85vh",overflowY:"auto"}}>
-        <h3 style={{fontSize:15,fontWeight:700,color:t.text,margin:"0 0 16px"}}>Settings</h3>
+        <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",margin:"0 0 16px"}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:t.text,margin:0}}>Settings</h3>
+          <span style={{fontSize:11,fontWeight:500,color:t.textTertiary,letterSpacing:0.3}}>v1.2.4</span>
+        </div>
 
         {/* Body Tracker settings */}
         {mode === "body" && (
@@ -464,7 +533,7 @@ const SettingsModal = ({ target, theme, onSave, onCancel, allData, onImport, mod
           {dataMode === "export" && (
             <div>
               <p style={{fontSize:10,color:t.textTertiary,margin:"0 0 6px"}}>Select all text below, copy it, and save it somewhere safe.</p>
-              <textarea ref={exportRef} value={exportJson} readOnly onFocus={e=>e.target.select()} style={{width:"100%",height:100,resize:"vertical",background:t.inputBg,border:`1px solid ${t.inputBorder}`,borderRadius:8,color:t.textSecondary,fontSize:9,fontFamily:"monospace",padding:8,boxSizing:"border-box",outline:"none"}}/>
+              <textarea className="lt-scroll" ref={exportRef} value={exportJson} readOnly onFocus={e=>e.target.select()} style={{width:"100%",height:100,resize:"vertical",background:t.inputBg,border:`1px solid ${t.inputBorder}`,borderRadius:8,color:t.textSecondary,fontSize:9,fontFamily:"monospace",padding:8,boxSizing:"border-box",outline:"none"}}/>
               <button onClick={handleCopy} style={{...btnRow,marginTop:6,marginBottom:0,justifyContent:"center",color:copied?"#5DAE63":t.text,borderColor:copied?"rgba(93,174,99,0.3)":t.borderSub,background:copied?"rgba(93,174,99,0.06)":"transparent"}}>
                 {copied ? "Copied!" : "Copy to Clipboard"}
               </button>
@@ -474,7 +543,7 @@ const SettingsModal = ({ target, theme, onSave, onCancel, allData, onImport, mod
           {dataMode === "import" && (
             <div>
               <p style={{fontSize:10,color:t.textTertiary,margin:"0 0 6px"}}>Paste your backup data below and restore.</p>
-              <textarea value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste backup JSON here..." style={{width:"100%",height:100,resize:"vertical",background:t.inputBg,border:`1px solid ${t.inputBorder}`,borderRadius:8,color:t.text,fontSize:9,fontFamily:"monospace",padding:8,boxSizing:"border-box",outline:"none"}}/>
+              <textarea className="lt-scroll" value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste backup JSON here..." style={{width:"100%",height:100,resize:"vertical",background:t.inputBg,border:`1px solid ${t.inputBorder}`,borderRadius:8,color:t.text,fontSize:9,fontFamily:"monospace",padding:8,boxSizing:"border-box",outline:"none"}}/>
               <button onClick={handlePasteImport} style={{...btnRow,marginTop:6,marginBottom:0,justifyContent:"center",opacity:importText.trim()?1:0.4,color:"#4C9ADE",borderColor:"rgba(76,154,222,0.3)"}}>
                 Restore Backup
               </button>
@@ -505,11 +574,13 @@ const WeekGrid = ({ getColor, currentWeek, selectedWeek, onSelect, theme }) => {
       {rows.map((row, ri) => (
         <div key={ri} style={{display:"grid",gridTemplateColumns:`repeat(${COLS},1fr)`,gap:3}}>
           {row.map(n => {
-            const isCurrent = n === selectedWeek; const isFuture = n > currentWeek;
+            const isFuture = n > currentWeek;
             const color = getColor(n);
-            const bg = isCurrent ? "#4C9ADE" : color || (isFuture ? (theme==="dark"?"#2A2A2A":"#F0F0F0") : (theme==="dark"?"#353535":"#E4E4E4"));
-            const fg = isCurrent ? "#FFF" : color ? "#FFF" : isFuture ? t.textFaint : t.textTertiary;
-            return <div key={n} onClick={()=>n<=currentWeek&&onSelect(n)} style={{aspectRatio:"1",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,fontVariantNumeric:"tabular-nums",color:fg,background:bg,cursor:n<=currentWeek?"pointer":"default",transition:"all 0.15s ease",boxShadow:isCurrent?"0 0 0 2px rgba(76,154,222,0.35)":"none"}}>{n}</div>;
+            const bg = color || (isFuture ? (theme==="dark"?"#2A2A2A":"#F0F0F0") : (theme==="dark"?"#353535":"#E4E4E4"));
+            const fg = color ? "#FFF" : isFuture ? t.textFaint : t.textTertiary;
+            const isLocked = color === "#1B8A5A";
+            const boxShadow = isLocked ? undefined : "none";
+            return <div key={n} className={isLocked?"lt-locked-cell":""} onClick={()=>n<=currentWeek&&onSelect(n)} style={{aspectRatio:"1",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,fontVariantNumeric:"tabular-nums",color:fg,background:bg,cursor:n<=currentWeek?"pointer":"default",transition:"all 0.15s ease",boxShadow}}>{n}</div>;
           })}
           {row.length<COLS&&Array.from({length:COLS-row.length},(_,i)=><div key={`e${i}`}/>)}
         </div>
@@ -520,6 +591,7 @@ const WeekGrid = ({ getColor, currentWeek, selectedWeek, onSelect, theme }) => {
 
 // ─── Verdict Messages ───
 const verdictMessages = {
+  locked: ["Every single objective. Maxed. This is the ceiling — you hit it.","Nothing left on the table. This is what locked in looks like.","You didn't just meet targets. You erased them.","Perfect week. Not luck. Not accident. You chose this.","Whatever you were chasing this week — you caught it.","Zero compromises. Zero excuses. This is the version.","You built a week that owes you nothing.","This is the kind of week you remember a year from now.","Absolute discipline. Don't forget what this felt like.","You didn't recover. You didn't survive. You dominated."],
   solid: ["70%+ hit. You showed up and delivered.","This is what discipline looks like. Not perfect — consistent.","You said you'd do it. You did it. That's the whole game.","Solid doesn't mean easy. It means you fought through it.","This week proved your foundation is getting stronger.","No luck involved. This was all you.","The version of you from six months ago would be proud.","You didn't need motivation. You just needed the checklist.","Results compound. This week matters more than you think.","Locked in. Keep building."],
   recovered: ["You slipped but got back up. That's not failure — that's the system working.","Recovery IS the skill. You're getting better at it.","A perfect week means nothing if you can't survive a bad one. You survived.","You didn't let one bad day become a bad week. That's growth.","Bouncing back is harder than staying on track. Respect that.","The spiral tried to pull you under. You didn't let it.","40% is better than 0%. And you know that now.","This is the week that separates you from who you used to be.","You could've quit. You didn't. Write that down.","Momentum doesn't care about perfection. It cares about showing up again."],
   spiraled: ["Rough week. Name it, then move forward.","This week doesn't define you. What you do next week does.","You're still here. You're still tracking. That matters.","Even your worst week is data, not a death sentence.","The old you wouldn't have even logged this. You did.","One red square in a sea of green is called being human.","Don't spiral about the spiral. Just start tomorrow's checklist.","You know what went wrong. That's already half the fix.","Rock bottom is a foundation, not a grave. Build from here.","The metric isn't this week. It's how fast you get back up."],
@@ -530,7 +602,7 @@ const bodyMessages = {
   gaining: ["Heavier this week. Name it, don't spiral.","Weight went up. One week doesn't undo the work.","Bad weeks happen. The scale is data, not a verdict.","Don't punish yourself. Adjust and move forward.","You logged it. That's accountability. Now fix it."],
 };
 const getMsg = (msgs, week) => msgs[week % msgs.length];
-const verdictMeta = { solid: { color: "#5DAE63", label: "Solid Week" }, recovered: { color: "#E8A435", label: "Recovered" }, spiraled: { color: "#DC4C3E", label: "Spiraled" } };
+const verdictMeta = { locked: { color: "#1B8A5A", label: "Locked In" }, solid: { color: "#5DAE63", label: "Solid Week" }, recovered: { color: "#E8A435", label: "Recovered" }, spiraled: { color: "#DC4C3E", label: "Spiraled" } };
 
 // ─── MAIN APP ───
 function App() {
@@ -545,9 +617,12 @@ function App() {
   const [weightModal, setWeightModal] = useState(false);
   const [editingEntry, setEditingEntry] = useState(null); // { day, kg } or null
   const [settingsModal, setSettingsModal] = useState(false);
+  const [verdictModal, setVerdictModal] = useState(false);
+  const [chartRange, setChartRange] = useState("all"); // 'week' | '1m' | '3m' | '6m' | 'all'
   const yearOverviewRef = useRef(null);
   const noteSaveRef = useRef(null);
   const importingRef = useRef(false);
+  const journalRef = useRef(null);
 
   // ─── Load ───
   useEffect(() => {
@@ -585,16 +660,37 @@ function App() {
   const saveReorder = (no) => { let u = ensureWeek(weeks, wk, week); u = { ...u, [wk]: { ...u[wk], objectives: no } }; setWeeks(u); setSettingsModal(false); persist(u, notes, theme, bodyData); };
   const noteText = parseNote(notes[wk] || "");
   const handleNoteChange = (val) => { const u = { ...notes, [wk]: val }; setNotes(u); if (noteSaveRef.current) clearTimeout(noteSaveRef.current); noteSaveRef.current = setTimeout(() => persist(weeks, u, theme, bodyData), 600); };
+  // Auto-size journal textarea to content (capped at 200px, then scrolls)
+  useEffect(() => {
+    const el = journalRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  }, [noteText, wk, loaded]);
   const flip = () => { const nt = theme === "light" ? "dark" : "light"; setTheme(nt); persist(weeks, notes, nt, bodyData); };
 
   // Life verdicts
-  const wkVerdictFor = (key) => { const w = weeks[key]; if (!w?.objectives?.length) return null; const c = w.counts || {}; if (!Object.values(c).some(v => v > 0)) return null; return getVerdict(w.objectives, c); };
-  const verdict = weekObjs.length ? getVerdict(weekObjs, counts) : null;
+  const wkVerdictFor = (key) => { const w = weeks[key]; if (!w?.objectives?.length) return null; const c = w.counts || {}; if (!Object.values(c).some(v => v > 0)) return null; if (w.verdictOverride && ["locked","solid","recovered","spiraled"].includes(w.verdictOverride)) return w.verdictOverride; return getVerdict(w.objectives, c); };
+  const wkIsOverridden = (key) => !!weeks[key]?.verdictOverride;
+  const autoVerdictFor = (key) => { const w = weeks[key]; if (!w?.objectives?.length) return null; const c = w.counts || {}; if (!Object.values(c).some(v => v > 0)) return null; return getVerdict(w.objectives, c); };
+  const setVerdictOverride = (override) => {
+    let u = ensureWeek(weeks, wk, week);
+    const newWeek = { ...u[wk] };
+    if (override === null) delete newWeek.verdictOverride;
+    else newWeek.verdictOverride = override;
+    u = { ...u, [wk]: newWeek };
+    setWeeks(u); persist(u, notes, theme, bodyData);
+  };
+  const autoVerdict = weekObjs.length ? getVerdict(weekObjs, counts) : null;
+  const overrideVerdict = weeks[wk]?.verdictOverride || null;
+  const verdict = overrideVerdict || autoVerdict;
   const hasAnyCounts = Object.values(counts).some(v => v > 0);
   const displayVerdict = hasAnyCounts ? verdict : null;
+  const isVerdictOverridden = hasAnyCounts && !!overrideVerdict && overrideVerdict !== autoVerdict;
   const metN = weekObjs.filter(o => (counts[o.id] || 0) >= o.target).length;
   const excN = weekObjs.filter(o => (counts[o.id] || 0) > o.target).length;
   const allWeeks = Array.from({ length: WEEKS_TOTAL }, (_, i) => i + 1);
+  const lW = allWeeks.filter(n => wkVerdictFor(`w${n}`) === "locked").length;
   const gW = allWeeks.filter(n => wkVerdictFor(`w${n}`) === "solid").length;
   const yW = allWeeks.filter(n => wkVerdictFor(`w${n}`) === "recovered").length;
   const rW = allWeeks.filter(n => wkVerdictFor(`w${n}`) === "spiraled").length;
@@ -653,13 +749,31 @@ function App() {
     setLoaded(false);
   };
 
-  // All entries across all weeks for chart
+  // All entries across all weeks up to current selected week, enriched with real dates
+  const _yearStart = new Date(2026, 0, 1);
+  const _jan1Day = _yearStart.getDay() === 0 ? 6 : _yearStart.getDay() - 1;
   const allBodyEntries = [];
   for (let n = 1; n <= week; n++) {
     const ents = bodyData.entries[`w${n}`] || [];
-    ents.forEach(e => allBodyEntries.push({ ...e, week: n }));
+    ents.forEach(e => {
+      const date = new Date(2026, 0, 1 + (n - 1) * 7 - _jan1Day + e.day);
+      allBodyEntries.push({ ...e, week: n, date });
+    });
   }
-  const recentEntries = allBodyEntries.slice(-12);
+
+  // Filter entries based on chartRange
+  const filteredChartEntries = (() => {
+    if (!allBodyEntries.length) return [];
+    if (chartRange === "all") return allBodyEntries;
+    if (chartRange === "week") return allBodyEntries.filter(e => e.week === week);
+    // Anchor: the date of the currently-selected week's last day (or today if current week)
+    const anchorDate = isCurrentWeek ? new Date() : new Date(2026, 0, 1 + (week - 1) * 7 - _jan1Day + 6);
+    const daysMap = { "1m": 30, "3m": 90, "6m": 180 };
+    const days = daysMap[chartRange] || 30;
+    const cutoff = new Date(anchorDate.getTime() - days * 24 * 60 * 60 * 1000);
+    return allBodyEntries.filter(e => e.date >= cutoff && e.date <= anchorDate);
+  })();
+  const recentEntries = filteredChartEntries;
 
   // Body week grid color
   const bodyWeekColor = (n) => {
@@ -677,7 +791,7 @@ function App() {
   const lifeWeekColor = (n) => {
     const v = wkVerdictFor(`w${n}`);
     if (!v) return null;
-    return { solid: "#5DAE63", recovered: "#E8A435", spiraled: "#DC4C3E" }[v];
+    return { locked: "#1B8A5A", solid: "#5DAE63", recovered: "#E8A435", spiraled: "#DC4C3E" }[v];
   };
 
   if (!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:t.bg,color:t.textTertiary,fontSize:14}}>Loading...</div>;
@@ -686,11 +800,12 @@ function App() {
   return (
     <div style={{minHeight:"100vh",background:t.bg,padding:"32px 16px",maxWidth:500,margin:"0 auto",transition:"background 0.2s"}}>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet"/>
-      <style>{`*{font-family:'Inter',system-ui,sans-serif;box-sizing:border-box;-webkit-tap-highlight-color:transparent}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield}button,div,span,a{-webkit-tap-highlight-color:transparent}::selection{background:rgba(76,154,222,0.2)}`}</style>
+      <style>{`*{font-family:'Inter',system-ui,sans-serif;box-sizing:border-box;-webkit-tap-highlight-color:transparent}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}@keyframes shimmer{0%,100%{opacity:.85}50%{opacity:1}}@keyframes lockedGlow{0%,100%{box-shadow:0 0 0 1.5px rgba(27,138,90,0.55),0 0 8px rgba(27,138,90,0.45)}50%{box-shadow:0 0 0 1.5px rgba(27,138,90,0.85),0 0 14px rgba(27,138,90,0.7)}}input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield}button,div,span,a{-webkit-tap-highlight-color:transparent}::selection{background:rgba(76,154,222,0.2)}.lt-scroll::-webkit-scrollbar{width:6px;height:6px}.lt-scroll::-webkit-scrollbar-track{background:transparent}.lt-scroll::-webkit-scrollbar-thumb{background:${theme==="dark"?"rgba(255,255,255,0.12)":"rgba(0,0,0,0.12)"};border-radius:3px;transition:background .2s}.lt-scroll::-webkit-scrollbar-thumb:hover{background:${theme==="dark"?"rgba(255,255,255,0.22)":"rgba(0,0,0,0.22)"}}.lt-scroll{scrollbar-width:thin;scrollbar-color:${theme==="dark"?"rgba(255,255,255,0.12) transparent":"rgba(0,0,0,0.12) transparent"}}.lt-locked-cell{animation:lockedGlow 3.2s ease-in-out infinite}`}</style>
 
       {modal && <Modal obj={modal.obj||null} theme={theme} onSave={saveObj} onCancel={()=>setModal(null)}/>}
       {weightModal && <WeightModal value={editingEntry?.kg || currentKg || 80} target={bTarget} theme={theme} onSave={saveWeight} onCancel={()=>{setWeightModal(false);setEditingEntry(null)}} editEntry={editingEntry} onDelete={deleteWeight} selectedWeek={week}/>}
       {settingsModal && <SettingsModal target={bTarget} theme={theme} onSave={saveBodySettings} onCancel={()=>setSettingsModal(false)} allData={{weeks,notes,theme,bodyData}} onImport={importData} mode={mode} objs={weekObjs} counts={counts} onReorder={saveReorder} isHistorical={isHistorical}/>}
+      {verdictModal && <VerdictModal theme={theme} currentVerdict={verdict} autoVerdict={autoVerdict} week={week} onCancel={()=>setVerdictModal(false)} onSet={(v)=>{setVerdictOverride(v);setVerdictModal(false)}}/>}
 
       {/* Header */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:32}}>
@@ -725,6 +840,18 @@ function App() {
         </div>
       </div>
 
+      {/* ═══════════ SHARED: Weight Logging Nudge ═══════════ */}
+      {isCurrentWeek && bEntries.length === 0 && (
+        <div onClick={()=>{if(mode!=="body")setMode("body");setWeightModal(true)}} style={{background:theme==="dark"?"rgba(76,154,222,0.12)":"rgba(76,154,222,0.08)",border:`1px solid ${theme==="dark"?"rgba(76,154,222,0.35)":"rgba(76,154,222,0.3)"}`,borderRadius:12,padding:"12px 14px",marginBottom:16,cursor:"pointer",display:"flex",alignItems:"center",gap:10,animation:"shimmer 2.8s ease-in-out infinite"}}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4C9ADE" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#4C9ADE",lineHeight:1.3}}>Log your weight for this week</div>
+            <div style={{fontSize:11,color:t.textSecondary,marginTop:1}}>Tap to add an entry · takes 5 seconds</div>
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4C9ADE" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}><path d="M9 18l6-6-6-6"/></svg>
+        </div>
+      )}
+
       {/* ═══════════ LIFE TRACKER MODE ═══════════ */}
       {mode === "life" && <>
         <div style={{background:t.card,borderRadius:14,border:`1px solid ${t.border}`,marginBottom:20,overflow:"hidden"}}>
@@ -737,19 +864,26 @@ function App() {
           <div style={{padding:isHistorical?"14px 16px 16px":"0 16px 16px"}}>
             <div style={{display:"flex",gap:12,marginBottom:12,fontSize:12,fontWeight:600}}>
               <span style={{color:"#5DAE63"}}>{metN} met</span>
-              {excN>0&&<span style={{color:GOLD}}>{excN} exceeded</span>}
+              {excN>0&&<span style={{color:t.textSecondary}}>{excN} exceeded</span>}
               <span style={{color:t.textTertiary}}>{weekObjs.length-metN} remaining</span>
             </div>
             {displayVerdict&&(
-              <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:10,background:theme==="dark"?`${verdictMeta[displayVerdict].color}15`:`${verdictMeta[displayVerdict].color}10`,border:`1px solid ${verdictMeta[displayVerdict].color}30`,marginBottom:12}}>
+              <div onClick={isHistorical?undefined:()=>setVerdictModal(true)} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:10,background:theme==="dark"?`${verdictMeta[displayVerdict].color}15`:`${verdictMeta[displayVerdict].color}10`,border:`1px solid ${verdictMeta[displayVerdict].color}30`,marginBottom:12,cursor:isHistorical?"default":"pointer",transition:"all 0.15s"}}>
                 <div style={{width:10,height:10,borderRadius:"50%",background:verdictMeta[displayVerdict].color,flexShrink:0}}/>
-                <div><div style={{fontSize:13,fontWeight:700,color:verdictMeta[displayVerdict].color}}>{verdictMeta[displayVerdict].label}</div><div style={{fontSize:11,color:t.textSecondary,marginTop:1}}>{getMsg(verdictMessages[displayVerdict],week)}</div></div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,color:verdictMeta[displayVerdict].color,display:"flex",alignItems:"center",gap:6}}>
+                    {verdictMeta[displayVerdict].label}
+                    {isVerdictOverridden&&<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={verdictMeta[displayVerdict].color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{opacity:0.7}}><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>}
+                  </div>
+                  <div style={{fontSize:11,color:t.textSecondary,marginTop:1}}>{getMsg(verdictMessages[displayVerdict],week)}</div>
+                </div>
+                {!isHistorical&&<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={t.textTertiary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,opacity:0.6}}><path d="M9 18l6-6-6-6"/></svg>}
               </div>
             )}
             <div style={{paddingTop:10,borderTop:`1px solid ${t.borderSub}`}}>
               <div style={{fontSize:10,fontWeight:600,color:t.textFaint,marginBottom:6,letterSpacing:0.3}}>How it works</div>
               <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                {[{dot:"#5DAE63",t:"Solid",d:"70%+ objectives met"},{dot:"#E8A435",t:"Recovered",d:"40–69% — bounced back"},{dot:"#DC4C3E",t:"Spiraled",d:"Under 40%"}].map(v=>(
+                {[{dot:"#1B8A5A",t:"Locked In",d:"Every objective maxed out"},{dot:"#5DAE63",t:"Solid",d:"A strong week, most things hit"},{dot:"#E8A435",t:"Recovered",d:"Slipped but bounced back"},{dot:"#DC4C3E",t:"Spiraled",d:"A rough week, it happens"}].map(v=>(
                   <div key={v.t} style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:8,height:8,borderRadius:"50%",background:v.dot,flexShrink:0}}/><span style={{fontSize:11,color:t.textSecondary}}><span style={{fontWeight:700,color:v.dot}}>{v.t}</span> — {v.d}</span></div>
                 ))}
               </div>
@@ -832,11 +966,27 @@ function App() {
           </div>
 
           {/* Progress chart — inside same card, bleeds to edges */}
-          {recentEntries.length > 1 && (
+          {allBodyEntries.length > 0 && (
             <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${t.borderSub}`}}>
-              <div style={{fontSize:12,fontWeight:700,color:t.text,marginBottom:4}}>Progress</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:12,fontWeight:700,color:t.text}}>Progress</div>
+                <div style={{display:"flex",gap:3,background:theme==="dark"?"rgba(255,255,255,0.04)":"rgba(0,0,0,0.04)",padding:2,borderRadius:7}}>
+                  {[{k:"week",l:"Week"},{k:"1m",l:"1M"},{k:"3m",l:"3M"},{k:"6m",l:"6M"},{k:"all",l:"All"}].map(r => {
+                    const active = chartRange === r.k;
+                    return (
+                      <button key={r.k} onClick={()=>setChartRange(r.k)} style={{padding:"4px 8px",fontSize:9,fontWeight:700,border:"none",borderRadius:5,cursor:"pointer",background:active?t.card:"transparent",color:active?t.text:t.textTertiary,boxShadow:active?(theme==="dark"?"0 1px 2px rgba(0,0,0,0.25)":"0 1px 2px rgba(0,0,0,0.08)"):"none",letterSpacing:0.3,transition:"all 0.15s"}}>{r.l}</button>
+                    );
+                  })}
+                </div>
+              </div>
               <div style={{margin:"0 -16px",overflow:"hidden"}}>
-                <MiniChart entries={recentEntries} target={bTarget} theme={theme}/>
+                {recentEntries.length > 0 ? (
+                  <MiniChart entries={recentEntries} target={bTarget} theme={theme}/>
+                ) : (
+                  <div style={{height:160,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:t.textTertiary,fontWeight:500}}>
+                    No entries in this range
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -893,24 +1043,59 @@ function App() {
           <h2 style={{fontSize:14,fontWeight:700,color:t.text,margin:0}}>Journal</h2>
           <span style={{fontSize:11,color:t.textTertiary,fontWeight:500}}>Reflect on week {week}</span>
         </div>
-        <textarea value={noteText} onChange={e=>handleNoteChange(e.target.value)} placeholder="What happened this week?" rows={2} style={{width:"100%",minHeight:48,maxHeight:200,resize:"vertical",background:"transparent",border:"none",outline:"none",color:t.text,fontSize:13,lineHeight:1.75,fontFamily:JOURNAL_FONT,fontWeight:400,padding:0,boxSizing:"border-box",letterSpacing:0.1}}/>
+        <textarea ref={journalRef} className="lt-scroll" value={noteText} onChange={e=>handleNoteChange(e.target.value)} placeholder="What happened this week?" style={{width:"100%",minHeight:48,maxHeight:200,resize:"none",overflowY:"auto",background:"transparent",border:"none",outline:"none",color:t.text,fontSize:13,lineHeight:1.75,fontFamily:JOURNAL_FONT,fontWeight:400,padding:0,boxSizing:"border-box",letterSpacing:0.1}}/>
       </div>
 
       {/* ═══════════ SHARED: Year Overview ═══════════ */}
       <div ref={yearOverviewRef} style={{background:t.card,borderRadius:14,border:`1px solid ${t.border}`,padding:16}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
           <h2 style={{fontSize:14,fontWeight:700,color:t.text,margin:0}}>Year Overview</h2>
-          {mode==="life"&&(gW+yW+rW)>0&&<span style={{fontSize:11,color:t.textTertiary,fontWeight:500}}>{gW}s &middot; {yW}r &middot; {rW}sp</span>}
         </div>
         <p style={{fontSize:11,color:t.textTertiary,margin:"0 0 12px"}}>Tap any past week to review it.</p>
         <WeekGrid getColor={mode==="life"?lifeWeekColor:bodyWeekColor} currentWeek={CURRENT_WEEK} selectedWeek={week} onSelect={setWeek} theme={theme}/>
-        <div style={{display:"flex",gap:14,marginTop:14,paddingTop:10,borderTop:`1px solid ${t.borderSub}`,flexWrap:"wrap"}}>
-          {mode==="life" ? (
-            [{c:"#5DAE63",l:"Solid"},{c:"#E8A435",l:"Recovered"},{c:"#DC4C3E",l:"Spiraled"},{c:"#4C9ADE",l:"Current"}].map(x=>(<div key={x.l} style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,borderRadius:4,background:x.c}}/><span style={{fontSize:10,fontWeight:600,color:t.textTertiary}}>{x.l}</span></div>))
-          ) : (
-            [{c:"#5DAE63",l:"Dropped"},{c:"#E8A435",l:"Maintained"},{c:"#DC4C3E",l:"Gained"},{c:"#4C9ADE",l:"Current"}].map(x=>(<div key={x.l} style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,borderRadius:4,background:x.c}}/><span style={{fontSize:10,fontWeight:600,color:t.textTertiary}}>{x.l}</span></div>))
-          )}
-        </div>
+        {(() => {
+          let items;
+          if (mode === "life") {
+            const total = lW + gW + yW + rW;
+            items = [
+              { c: t.textSecondary, l: "Total", n: total, bold: true },
+              { c: "#1B8A5A", l: "Locked In", n: lW },
+              { c: "#5DAE63", l: "Solid", n: gW },
+              { c: "#E8A435", l: "Recovered", n: yW },
+              { c: "#DC4C3E", l: "Spiraled", n: rW },
+            ];
+          } else {
+            let dropped = 0, maintained = 0, gained = 0;
+            for (let n = 1; n <= WEEKS_TOTAL; n++) {
+              const c = bodyWeekColor(n);
+              if (c === "#5DAE63") dropped++;
+              else if (c === "#DC4C3E") gained++;
+              else if (c === "#E8A435") maintained++;
+            }
+            const total = dropped + maintained + gained;
+            items = [
+              { c: t.textSecondary, l: "Total", n: total, bold: true },
+              { c: "#5DAE63", l: "Dropped", n: dropped },
+              { c: "#E8A435", l: "Maintained", n: maintained },
+              { c: "#DC4C3E", l: "Gained", n: gained },
+            ];
+          }
+          return (
+            <div style={{display:"flex",gap:12,marginTop:14,paddingTop:10,borderTop:`1px solid ${t.borderSub}`,flexWrap:"wrap",rowGap:8}}>
+              {items.map(x => {
+                const dim = !x.bold && x.n === 0;
+                return (
+                  <div key={x.l} style={{display:"flex",alignItems:"center",gap:5,opacity:dim?0.4:1}}>
+                    {!x.bold && <div style={{width:9,height:9,borderRadius:3,background:x.c,flexShrink:0}}/>}
+                    <span style={{fontSize:10,fontWeight:600,color:t.textTertiary,fontVariantNumeric:"tabular-nums"}}>
+                      <span style={{fontWeight:800}}>{x.n}</span> {x.l}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
 
       <p style={{textAlign:"center",marginTop:24,fontSize:11,color:t.textFaint,fontWeight:500,letterSpacing:0.5}}>
